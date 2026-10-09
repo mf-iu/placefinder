@@ -1,0 +1,14 @@
+# Downloaded data (data/download.sh), never committed
+/data/*
+!/data/download.sh
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+dist/
+
+# Local settings and secrets
+.env
