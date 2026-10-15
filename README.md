@@ -206,6 +206,8 @@ Ein neues Paket ist zunächst privat. Für Termin 3 auf GitHub unter *Packages* 
 `compose.yaml` startet PlaceFinder (`api`) und eine PostGIS-Datenbank (`db`). PlaceFinder v0 nutzt die Datenbank noch nicht; die Datenhaltung folgt in Termin 6. Hier geht es darum, dass beide Container laufen und sich über das gemeinsame Netz erreichen.
 
 ```bash
+cd /workspaces/placefinder                    # compose.yaml liegt hier
+docker ps                                     # läuft noch ein Container auf Port 8000? stoppen
 docker compose up -d                          # bauen (falls nötig) und starten
 docker compose ps                             # db: healthy, api: running
 docker compose logs -f api
@@ -215,6 +217,14 @@ docker compose down -v                        # zusätzlich das Volume löschen
 ```
 
 `api` startet erst, wenn `db` den Healthcheck (`pg_isready`) besteht. Der Dienstname `db` ist im Netz des Stacks zugleich der Hostname der Datenbank.
+
+Häufige Fehler:
+
+| Meldung | Ursache | Abhilfe |
+|---|---|---|
+| `no configuration file provided: not found` | Das Terminal steht nicht im Verzeichnis mit `compose.yaml` (neue Terminals öffnen im Übungs-Repository). | `cd /workspaces/placefinder` |
+| `Bind for 0.0.0.0:8000 failed: port is already allocated` | Ein anderer Container belegt Port 8000, meist der aus `docker run` der Übung. | `docker ps`, den Container mit `docker stop <name>` beenden, dann `docker compose up -d` |
+| `Temporary failure in name resolution` beim Verbindungstest | Der Container `api` hat nach einem fehlgeschlagenen Start kein vollständiges Netz. | `docker compose down`, dann `docker compose up -d` |
 
 ## Entwicklung
 
