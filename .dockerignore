@@ -1,0 +1,12 @@
+# Only pyproject.toml, uv.lock and src/ are needed to build the image.
+# Everything else stays out of the build context: faster builds, no secrets.
+.git
+.venv
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.env
+# the image downloads its own data in the Dockerfile
+data/
+tests/

@@ -1,0 +1,29 @@
+# PlaceFinder with a PostGIS database for local development.
+# PlaceFinder v0 does not use the database yet; it follows in session 6.
+# Start: docker compose up -d   Stop: docker compose down (-v also deletes the data)
+services:
+  api:
+    build: .
+    image: placefinder:0.1.0
+    ports: ["8000:8000"]
+    environment:
+      # the service name db is the host name in the network of the stack
+      DATABASE_URL: postgresql://pf:pf@db/pf
+    depends_on:
+      db: {condition: service_healthy}
+  db:
+    image: postgis/postgis:18-3.6
+    environment:
+      # plain text passwords for local development only
+      POSTGRES_USER: pf
+      POSTGRES_PASSWORD: pf
+      POSTGRES_DB: pf
+    # from PostgreSQL 18 on, the volume belongs at /var/lib/postgresql
+    volumes: [pgdata:/var/lib/postgresql]
+    healthcheck:
+      # -h 127.0.0.1: check via TCP, the init server only listens on the socket
+      test: pg_isready -h 127.0.0.1 -U pf
+      interval: 5s
+
+volumes:
+  pgdata:

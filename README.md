@@ -2,7 +2,7 @@
 
 Beispielanwendung des Kurses „Cloud Computing“: ein Dienst zur Ortssuche auf Basis von GeoNames, später ergänzt um OpenStreetMap. PlaceFinder wächst von Termin zu Termin; jeder Stand ist als Git-Tag verfügbar.
 
-**Stand v0 (Tag `t01`):** eine FastAPI-Anwendung, die beim Start die GeoNames-Datei `cities15000` (alle Orte ab 15.000 Einwohnern, rund 34.000) in den Speicher lädt und nach Namen durchsucht.
+**Stand v0 (Tags `t01` und `t02`):** eine FastAPI-Anwendung, die beim Start die GeoNames-Datei `cities15000` (alle Orte ab 15.000 Einwohnern, rund 34.000) in den Speicher lädt und nach Namen durchsucht. Ab `t02` gibt es dazu ein Container-Image und eine `compose.yaml` mit PostGIS (Abschnitt [Container](#container)).
 
 ## Einrichtung
 
@@ -79,6 +79,84 @@ uv sync --frozen --no-dev                     # ohne Entwicklungswerkzeuge
 DATA_FILE=/pfad/zu/cities15000.txt .venv/bin/uvicorn placefinder.main:app --host 0.0.0.0 --port 8000
 ```
 
+## Container
+
+Ab Tag `t02`. Alle Befehle im Terminal des Dev Containers, im Verzeichnis `/workspaces/placefinder`.
+
+**Zwei Docker-Instanzen:** Der Dev Container hat eine eigene Docker Engine (Docker in Docker). Images, die dort gebaut werden, sieht Docker in der Ubuntu-Shell von WSL nicht, und umgekehrt. Im Kurs laufen alle Container-Übungen im Dev Container. Auch die Anmeldung bei Docker Hub gilt je Instanz: einmal im Dev Container `docker login` ausführen, sonst greift schnell das Pull-Limit für anonyme Zugriffe.
+
+### Image bauen und starten
+
+```bash
+docker build -t placefinder:0.1.0 .          # Image bauen (erster Build einige Minuten)
+docker history placefinder:0.1.0             # Schichten mit Größe
+docker run --rm -p 8000:8000 placefinder:0.1.0
+curl "http://localhost:8000/places?q=Erfurt" # in einem zweiten Terminal
+```
+
+Das `Dockerfile` hat drei Stufen:
+
+| Stufe | Aufgabe |
+|---|---|
+| `data` | lädt die GeoNames-Datei (`cities15000`) und entpackt sie nach `/data` |
+| `build` | installiert mit uv die Abhängigkeiten genau nach `uv.lock`, dann PlaceFinder selbst als Paket |
+| Runtime | übernimmt nur die virtuelle Umgebung und die Daten, läuft als Benutzer `app` ohne root |
+
+Die Daten gehören damit zum Image (rund 8 MB). So startet der Container überall ohne Download, auch auf den Serverless-Container-Diensten in Termin 3; aktuelle Daten gibt es mit einem neuen Build. Eine andere Datei wählt `--build-arg GEONAMES_FILE=cities5000`. `.dockerignore` hält `.git`, `.venv`, `data/` und `tests/` aus dem Build-Kontext heraus.
+
+Ändert sich nur der Code unter `src/`, baut Docker nur die letzten Schichten neu; ändert sich `uv.lock`, auch die Abhängigkeiten.
+
+### Image verkleinern und prüfen
+
+Zum Vergleich ein Image mit nur einer Stufe auf Basis von `python:3.14` bauen (ohne Daten, nur für den Größenvergleich):
+
+```bash
+docker build -t placefinder:single -f - . <<'EOF'
+FROM python:3.14
+COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /bin/uv
+WORKDIR /app
+COPY . .
+RUN uv sync --locked --no-dev
+CMD [".venv/bin/uvicorn", "placefinder.main:app", "--host", "0.0.0.0"]
+EOF
+docker images placefinder                                       # Größen vergleichen
+trivy image --severity HIGH,CRITICAL placefinder:0.1.0          # Schwachstellen
+trivy image --severity HIGH,CRITICAL placefinder:single
+```
+
+Fehlt `trivy` im Dev Container, geht es auch mit dem Image von Trivy:
+`docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.1.0`
+(feste Version: Einige Trivy-Images vom März 2026 waren manipuliert, deshalb nie ohne Tag)
+
+### Image in die GitHub Container Registry laden
+
+Optional in Termin 2, nötig ab Termin 3 (die Container-Dienste laden das Image von dort):
+
+```bash
+gh auth login                                 # einmalig, falls noch nicht angemeldet
+gh auth refresh -s write:packages             # Recht zum Hochladen von Paketen
+gh auth token | docker login ghcr.io -u <github-user> --password-stdin
+docker tag placefinder:0.1.0 ghcr.io/<github-user>/placefinder:t02
+docker push ghcr.io/<github-user>/placefinder:t02
+```
+
+Ein neues Paket ist zunächst privat. Für Termin 3 auf GitHub unter *Packages* → *placefinder* → *Package settings* → *Change visibility* auf **Public** stellen.
+
+### Compose: PlaceFinder mit PostGIS
+
+`compose.yaml` startet PlaceFinder (`api`) und eine PostGIS-Datenbank (`db`). PlaceFinder v0 nutzt die Datenbank noch nicht; die Datenhaltung folgt in Termin 6. Hier geht es darum, dass beide Container laufen und sich über das gemeinsame Netz erreichen.
+
+```bash
+docker compose up -d                          # bauen (falls nötig) und starten
+docker compose ps                             # db: healthy, api: running
+docker compose logs -f api
+docker compose exec api python -c "import socket; socket.create_connection(('db', 5432)); print('db reachable')"
+docker compose down                           # stoppen; die Datenbank bleibt im Volume pgdata
+docker compose down -v                        # zusätzlich das Volume löschen
+```
+
+`api` startet erst, wenn `db` den Healthcheck (`pg_isready`) besteht. Der Dienstname `db` ist im Netz des Stacks zugleich der Hostname der Datenbank.
+
 ## Entwicklung
 
 ```bash
@@ -89,6 +167,8 @@ uv run ruff format      # Formatierung
 
 ```
 start.sh                    # starts the server locally (WSL or dev container)
+Dockerfile, .dockerignore   # container image with the GeoNames data (from t02)
+compose.yaml                # PlaceFinder with PostGIS for local development (from t02)
 src/placefinder/main.py     # FastAPI app: endpoints, loading the data at startup
 src/placefinder/places.py   # Place, GeoNames parser, in-memory repository with name index
 data/download.sh            # downloads GeoNames dumps; data files are not committed
@@ -102,9 +182,10 @@ Code, Kommentare und Commit-Messages sind auf Englisch.
 | Tag | Stand |
 |---|---|
 | `t01` | v0: Ortssuche über `cities15000` im Speicher (`/places?q=…`, `/places/{id}`) |
+| `t02` | v0 als Container-Image (`Dockerfile` mit den GeoNames-Daten), `compose.yaml` mit PostGIS |
 
-Die weiteren Stände folgen als Tags `t02`, `t03` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
+Die weiteren Stände folgen als Tags `t03`, `t04` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
 
 ## Daten und Lizenz
 
-Die Ortsdaten stammen von [GeoNames](https://www.geonames.org) und stehen unter der Lizenz [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Die Lizenz verlangt eine Quellenangabe; PlaceFinder gibt sie unter `/` und in der API-Dokumentation aus. Die Daten werden nicht eingecheckt, sondern mit `data/download.sh` geladen.
+Die Ortsdaten stammen von [GeoNames](https://www.geonames.org) und stehen unter der Lizenz [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Die Lizenz verlangt eine Quellenangabe; PlaceFinder gibt sie unter `/` und in der API-Dokumentation aus. Die Daten werden nicht eingecheckt, sondern mit `data/download.sh` bzw. beim Bau des Images geladen.
