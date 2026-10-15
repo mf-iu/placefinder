@@ -83,7 +83,45 @@ DATA_FILE=/pfad/zu/cities15000.txt .venv/bin/uvicorn placefinder.main:app --host
 
 Ab Tag `t02`. Alle Befehle im Terminal des Dev Containers, im Verzeichnis `/workspaces/placefinder`.
 
-**Zwei Docker-Instanzen:** Der Dev Container hat eine eigene Docker Engine (Docker in Docker). Images, die dort gebaut werden, sieht Docker in der Ubuntu-Shell von WSL nicht, und umgekehrt. Im Kurs laufen alle Container-Übungen im Dev Container. Auch die Anmeldung bei Docker Hub gilt je Instanz: einmal im Dev Container `docker login` ausführen, sonst greift schnell das Pull-Limit für anonyme Zugriffe.
+**Zwei Docker-Instanzen:** Der Dev Container hat eine eigene Docker Engine (Docker in Docker). Images, die dort gebaut werden, sieht Docker in der Ubuntu-Shell von WSL nicht, und umgekehrt. Im Kurs laufen alle Container-Übungen im Dev Container. Auch eine Anmeldung bei Docker Hub gilt nur für die Instanz, in der sie ausgeführt wurde (siehe nächster Abschnitt).
+
+### Docker Hub: anmelden oder nicht?
+
+Die Basis-Images (`python:3.14-slim`, `postgis/postgis`) kommen von Docker Hub. Docker Hub begrenzt die Downloads (Pulls) innerhalb von 6 Stunden:
+
+| Zugriff | Pulls je 6 Stunden | gezählt je |
+|---|---|---|
+| ohne Anmeldung | 100 | öffentliche IP-Adresse (IPv4) bzw. IPv6-/64-Netz |
+| mit kostenlosem Docker-Konto | 200 | Konto |
+
+Ein Pull ist ein Image (ein Manifest), nicht jede Schicht; bei Images für mehrere Architekturen zählt jede geladene Architektur. Das aktuelle Limit steht unter [Docker Hub pull usage and limits](https://docs.docker.com/docker-hub/usage/pulls/).
+
+**Entscheidungshilfe:** Wer zu Hause über einen eigenen Anschluss arbeitet, kommt ohne Anmeldung aus. In einem Hochschul- oder Firmennetz teilen sich dagegen oft alle Rechner eine öffentliche IP-Adresse; dann zählen die Pulls aller zusammen, und das anonyme Limit ist schnell erreicht. Dort lohnt die Anmeldung.
+
+**Anmelden** (kostenloses Konto auf [hub.docker.com](https://hub.docker.com)), im Terminal des Dev Containers:
+
+```bash
+docker login      # Bestätigung im Browser oder Benutzername und Zugangstoken
+docker logout     # Anmeldung wieder entfernen
+```
+
+Die Zugangsdaten speichert Docker unverschlüsselt in `~/.docker/config.json` des Containers. Wer Benutzername und Token eingibt, legt dafür auf Docker Hub ein Personal Access Token mit der Berechtigung *Public Repo Read-only* an, nicht das Passwort. Nach einem Neubau des Dev Containers ist die Anmeldung zu wiederholen; die Images selbst bleiben erhalten.
+
+**Fehler `toomanyrequests`:** Die Meldung beim Bauen oder Starten bedeutet, dass das Limit erreicht ist.
+
+- Anmelden und den Befehl wiederholen; ab dann zählt das eigene Kontingent.
+- Oder warten: Das Limit bezieht sich auf die letzten 6 Stunden, frühere Pulls fallen nach und nach heraus.
+- Bereits geladene Images bleiben in der Docker Engine des Dev Containers (`docker images`). Befehle, die ausdrücklich neu laden (`docker build --pull`, `docker compose pull`), bis dahin vermeiden.
+
+Wie viele Pulls noch übrig sind, zeigt eine Abfrage, die selbst nicht mitzählt (ohne Anmeldung: Kontingent der eigenen IP-Adresse):
+
+```bash
+token=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" | jq -r .token)
+curl -s --head -H "Authorization: Bearer $token" \
+  https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest | grep -i ratelimit
+```
+
+`ratelimit-limit: 100;w=21600` heißt 100 Pulls in 21600 Sekunden (6 Stunden), `ratelimit-remaining` ist der Rest. Fehlen diese Zeilen, gilt für die Adresse kein Limit.
 
 ### Image bauen und starten
 
@@ -100,7 +138,7 @@ Das `Dockerfile` hat drei Stufen:
 |---|---|
 | `data` | lädt die GeoNames-Datei (`cities15000`) und entpackt sie nach `/data` |
 | `build` | installiert mit uv die Abhängigkeiten genau nach `uv.lock`, dann PlaceFinder selbst als Paket |
-| Runtime | übernimmt nur die virtuelle Umgebung und die Daten, läuft als Benutzer `app` ohne root |
+| Runtime | übernimmt nur die virtuelle Umgebung und die Daten, entfernt pip, läuft als Benutzer `app` ohne root |
 
 Die Daten gehören damit zum Image (rund 8 MB). So startet der Container überall ohne Download, auch auf den Serverless-Container-Diensten in Termin 3; aktuelle Daten gibt es mit einem neuen Build. Eine andere Datei wählt `--build-arg GEONAMES_FILE=cities5000`. `.dockerignore` hält `.git`, `.venv`, `data/` und `tests/` aus dem Build-Kontext heraus.
 
@@ -127,6 +165,27 @@ trivy image --severity HIGH,CRITICAL placefinder:single
 Fehlt `trivy` im Dev Container, geht es auch mit dem Image von Trivy:
 `docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.1.0`
 (feste Version: Einige Trivy-Images vom März 2026 waren manipuliert, deshalb nie ohne Tag)
+
+### Trivy-Bericht lesen
+
+Trivy listet die Funde je Ziel: die Pakete des Betriebssystems (`debian`) und Python-Pakete (`python-pkg`). Wichtig sind die Spalten *Status* und *Fixed Version*:
+
+| Status | Bedeutung | Was tun? |
+|---|---|---|
+| `fixed` | Es gibt eine korrigierte Version (*Fixed Version*). | Paket bzw. Basis-Image aktualisieren und neu bauen |
+| `affected` | Betroffen, aber noch keine Korrektur verfügbar. | abwarten; später mit `docker build --pull` neu bauen |
+| `fix_deferred` | Die Distribution hat die Korrektur zurückgestellt, meist wegen geringer Auswirkung. | prüfen, ob die Anwendung das Paket überhaupt nutzt |
+
+Bei PlaceFinder (Stand `t02`) sind alle Python-Pakete der virtuellen Umgebung ohne Befund. Die Funde im Debian-Teil des Basis-Images (z. B. `util-linux`, `ncurses`, `systemd`) haben keine *Fixed Version*. PlaceFinder nutzt diese Programme nicht, und der Container läuft ohne root – die Funde sind vorhanden, aber praktisch nicht erreichbar.
+
+Die Python-Funde des Basis-Images (`msgpack`, `urllib3`, `setuptools`) stammen aus pip, das diese Pakete in sich mitbringt. Zur Laufzeit wird pip nicht gebraucht; die Runtime-Stufe entfernt es deshalb. Prüfen lässt sich die Herkunft eines Funds über den Pfad im JSON-Bericht:
+
+```bash
+trivy image --format json placefinder:0.1.0 \
+  | jq -r '.Results[] | .Vulnerabilities[]? | "\(.PkgName) \(.InstalledVersion) \(.PkgPath // "-")"'
+```
+
+Nur Funde mit verfügbarer Korrektur zeigt `trivy image --ignore-unfixed …` – so wird in CI-Pipelines oft geprüft (Termin 8). Weniger Funde haben Basis-Images mit weniger Paketen, etwa Distroless-Images.
 
 ### Image in die GitHub Container Registry laden
 

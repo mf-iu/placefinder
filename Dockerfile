@@ -33,8 +33,11 @@ RUN uv sync --locked --no-dev --no-editable
 # ---- Stage 3: runtime image without build tools ----
 FROM python:3.14-slim
 ARG GEONAMES_FILE
-# unprivileged user instead of root
-RUN useradd --system --uid 10001 app
+# unprivileged user instead of root;
+# pip is not needed at runtime and its bundled packages would
+# only add findings to the Trivy scan
+RUN useradd --system --uid 10001 app \
+ && python -m pip uninstall --yes --root-user-action ignore pip
 # copy only the finished virtual environment and the data
 COPY --from=build /app/.venv /app/.venv
 COPY --from=data /data /data
