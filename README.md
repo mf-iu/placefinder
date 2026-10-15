@@ -2,7 +2,7 @@
 
 Beispielanwendung des Kurses „Cloud Computing“: ein Dienst zur Ortssuche auf Basis von GeoNames, später ergänzt um OpenStreetMap. PlaceFinder wächst von Termin zu Termin; jeder Stand ist als Git-Tag verfügbar.
 
-**Stand v0 (Tags `t01` und `t02`):** eine FastAPI-Anwendung, die beim Start die GeoNames-Datei `cities15000` (alle Orte ab 15.000 Einwohnern, rund 34.000) in den Speicher lädt und nach Namen durchsucht. Ab `t02` gibt es dazu ein Container-Image und eine `compose.yaml` mit PostGIS (Abschnitt [Container](#container)).
+**Stand v0 (Tags `t01` und `t02`):** eine FastAPI-Anwendung, die beim Start die GeoNames-Datei `cities15000` (alle Orte ab 15.000 Einwohnern, rund 34.000) in den Speicher lädt und nach Namen durchsucht. Ab `t02` gibt es dazu ein Container-Image und eine `compose.yaml`, die PlaceFinder zusammen mit einem kleinen Übungsdienst startet (Abschnitt [Container](#container)). Eine Datenbank folgt in Termin 6.
 
 ## Einrichtung
 
@@ -87,7 +87,7 @@ Ab Tag `t02`. Alle Befehle im Terminal des Dev Containers, im Verzeichnis `/work
 
 ### Docker Hub: anmelden oder nicht?
 
-Die Basis-Images (`python:3.14-slim`, `postgis/postgis`) kommen von Docker Hub. Docker Hub begrenzt die Downloads (Pulls) innerhalb von 6 Stunden:
+Die Images `python:3.14-slim` und `busybox` kommen von Docker Hub. Docker Hub begrenzt die Downloads (Pulls) innerhalb von 6 Stunden:
 
 | Zugriff | Pulls je 6 Stunden | gezählt je |
 |---|---|---|
@@ -201,22 +201,32 @@ docker push ghcr.io/<github-user>/placefinder:t02
 
 Ein neues Paket ist zunächst privat. Für Termin 3 auf GitHub unter *Packages* → *placefinder* → *Package settings* → *Change visibility* auf **Public** stellen.
 
-### Compose: PlaceFinder mit PostGIS
+### Compose: zwei Dienste
 
-`compose.yaml` startet PlaceFinder (`api`) und eine PostGIS-Datenbank (`db`). PlaceFinder v0 nutzt die Datenbank noch nicht; die Datenhaltung folgt in Termin 6. Hier geht es darum, dass beide Container laufen und sich über das gemeinsame Netz erreichen.
+`compose.yaml` startet zwei Dienste: PlaceFinder (`api`) und `web`, einen winzigen Webserver aus dem offiziellen Image `busybox` (rund 2 MB).
+
+> **Warum ein zweiter Dienst, der nichts mit PlaceFinder zu tun hat?**
+> Mit nur einem Dienst wäre `compose.yaml` ein längerer `docker run`-Befehl. Erst mit zwei Diensten zeigt sich, was Compose leistet:
+> ein gemeinsames Netz, in dem der Dienstname zugleich der Hostname ist; eine Startreihenfolge mit Healthcheck; ein benanntes Volume, das Daten über `docker compose down` hinaus hält.
+> `web` ist dafür bewusst klein und unabhängig – PlaceFinder ruft ihn nicht auf. Eine Datenbank bekommt PlaceFinder erst in Termin 6: PostgreSQL mit PostGIS, dann als weiterer Dienst in dieser `compose.yaml`.
 
 ```bash
 cd /workspaces/placefinder                    # compose.yaml liegt hier
 docker ps                                     # läuft noch ein Container auf Port 8000? stoppen
 docker compose up -d                          # bauen (falls nötig) und starten
-docker compose ps                             # db: healthy, api: running
-docker compose logs -f api
-docker compose exec api python -c "import socket; socket.create_connection(('db', 5432)); print('db reachable')"
-docker compose down                           # stoppen; die Datenbank bleibt im Volume pgdata
+docker compose ps                             # web: healthy, api: running
+curl http://localhost:8080/                   # Startseite von web, liegt im Volume
+docker compose exec api python -c "import urllib.request; print(urllib.request.urlopen('http://web:8080/').read().decode())"
+docker compose exec web sh -c 'echo "Changed" > /www/index.html'
+docker compose down                           # Container und Netz weg, das Volume www bleibt
+docker compose up -d
+curl http://localhost:8080/                   # zeigt weiter "Changed"
 docker compose down -v                        # zusätzlich das Volume löschen
 ```
 
-`api` startet erst, wenn `db` den Healthcheck (`pg_isready`) besteht. Der Dienstname `db` ist im Netz des Stacks zugleich der Hostname der Datenbank.
+- **Netz:** Der Aufruf aus `api` erreicht `web` über den Dienstnamen als Hostnamen (`http://web:8080/`); Port 8080 auf dem Rechner braucht er dafür nicht.
+- **Reihenfolge:** `api` startet erst, wenn `web` den Healthcheck besteht (`wget` auf die Startseite).
+- **Volume:** `web` legt die Startseite beim ersten Start im Volume `www` an. Änderungen überstehen `docker compose down`; erst `down -v` löscht sie.
 
 Häufige Fehler:
 
@@ -224,7 +234,7 @@ Häufige Fehler:
 |---|---|---|
 | `no configuration file provided: not found` | Das Terminal steht nicht im Verzeichnis mit `compose.yaml` (neue Terminals öffnen im Übungs-Repository). | `cd /workspaces/placefinder` |
 | `Bind for 0.0.0.0:8000 failed: port is already allocated` | Ein anderer Container belegt Port 8000, meist der aus `docker run` der Übung. | `docker ps`, den Container mit `docker stop <name>` beenden, dann `docker compose up -d` |
-| `Temporary failure in name resolution` beim Verbindungstest | Der Container `api` hat nach einem fehlgeschlagenen Start kein vollständiges Netz. | `docker compose down`, dann `docker compose up -d` |
+| `Temporary failure in name resolution` beim Aufruf von `web` | Der Container `api` hat nach einem fehlgeschlagenen Start kein vollständiges Netz. | `docker compose down`, dann `docker compose up -d` |
 
 ## Entwicklung
 
@@ -237,7 +247,7 @@ uv run ruff format      # Formatierung
 ```
 start.sh                    # starts the server locally (WSL or dev container)
 Dockerfile, .dockerignore   # container image with the GeoNames data (from t02)
-compose.yaml                # PlaceFinder with PostGIS for local development (from t02)
+compose.yaml                # PlaceFinder and a small practice service (from t02)
 src/placefinder/main.py     # FastAPI app: endpoints, loading the data at startup
 src/placefinder/places.py   # Place, GeoNames parser, in-memory repository with name index
 data/download.sh            # downloads GeoNames dumps; data files are not committed
@@ -251,7 +261,7 @@ Code, Kommentare und Commit-Messages sind auf Englisch.
 | Tag | Stand |
 |---|---|
 | `t01` | v0: Ortssuche über `cities15000` im Speicher (`/places?q=…`, `/places/{id}`) |
-| `t02` | v0 als Container-Image (`Dockerfile` mit den GeoNames-Daten), `compose.yaml` mit PostGIS |
+| `t02` | v0 als Container-Image (`Dockerfile` mit den GeoNames-Daten), `compose.yaml` mit einem Übungsdienst |
 
 Die weiteren Stände folgen als Tags `t03`, `t04` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
 

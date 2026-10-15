@@ -1,29 +1,29 @@
-# PlaceFinder with a PostGIS database for local development.
-# PlaceFinder v0 does not use the database yet; it follows in session 6.
-# Start: docker compose up -d   Stop: docker compose down (-v also deletes the data)
+# PlaceFinder and a second service to practise Compose.
+# web is a tiny web server (BusyBox httpd, about 2 MB) that has nothing to
+# do with PlaceFinder. It shows what Compose adds to docker run: a shared
+# network with service names, a start order with health check and a named
+# volume. PlaceFinder gets its database (PostGIS) in session 6.
+# Start: docker compose up -d   Stop: docker compose down (-v also deletes the volume)
 services:
   api:
     build: .
     image: placefinder:0.1.0
     ports: ["8000:8000"]
-    environment:
-      # the service name db is the host name in the network of the stack
-      DATABASE_URL: postgresql://pf:pf@db/pf
     depends_on:
-      db: {condition: service_healthy}
-  db:
-    image: postgis/postgis:18-3.6
-    environment:
-      # plain text passwords for local development only
-      POSTGRES_USER: pf
-      POSTGRES_PASSWORD: pf
-      POSTGRES_DB: pf
-    # from PostgreSQL 18 on, the volume belongs at /var/lib/postgresql
-    volumes: [pgdata:/var/lib/postgresql]
+      # start api only after web passes its health check
+      web: {condition: service_healthy}
+  web:
+    image: busybox:1.37
+    # create a start page in the volume on the first start, then serve /www
+    command: >-
+      sh -c '[ -f /www/index.html ] || echo "Hello from the volume" >/www/index.html;
+      exec httpd -f -p 8080 -h /www'
+    ports: ["8080:8080"]
+    volumes: [www:/www]
     healthcheck:
-      # -h 127.0.0.1: check via TCP, the init server only listens on the socket
-      test: pg_isready -h 127.0.0.1 -U pf
+      # httpd answers 404 without index.html, so this also checks the page
+      test: wget -q --spider http://127.0.0.1:8080/
       interval: 5s
 
 volumes:
-  pgdata:
+  www:
