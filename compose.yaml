@@ -3,7 +3,7 @@
 # do with PlaceFinder. It shows what Compose adds to docker run: a shared
 # network with service names, a start order with health check and a named
 # volume. PlaceFinder gets its database (PostGIS) in session 6.
-# Start: docker compose up -d   Stop: docker compose down (-v also deletes the volume)
+# Start: docker compose up --detach   Stop: docker compose down (--volumes also deletes the volume)
 services:
   api:
     build: .
@@ -22,7 +22,7 @@ services:
     volumes: [www:/www]
     healthcheck:
       # httpd answers 404 without index.html, so this also checks the page
-      test: wget -q --spider http://127.0.0.1:8080/
+      test: wget --quiet --spider http://127.0.0.1:8080/
       interval: 5s
 
 volumes:

@@ -116,9 +116,9 @@ Die Zugangsdaten speichert Docker unverschlüsselt in `~/.docker/config.json` de
 Wie viele Pulls noch übrig sind, zeigt eine Abfrage, die selbst nicht mitzählt (ohne Anmeldung: Kontingent der eigenen IP-Adresse):
 
 ```bash
-token=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" | jq -r .token)
-curl -s --head -H "Authorization: Bearer $token" \
-  https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest | grep -i ratelimit
+token=$(curl --silent "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" | jq --raw-output .token)
+curl --silent --head --header "Authorization: Bearer $token" \
+  https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest | grep --ignore-case ratelimit
 ```
 
 `ratelimit-limit: 100;w=21600` heißt 100 Pulls in 21600 Sekunden (6 Stunden), `ratelimit-remaining` ist der Rest. Fehlen diese Zeilen, gilt für die Adresse kein Limit.
@@ -126,9 +126,9 @@ curl -s --head -H "Authorization: Bearer $token" \
 ### Image bauen und starten
 
 ```bash
-docker build -t placefinder:0.1.0 .          # Image bauen (erster Build einige Minuten)
+docker build --tag placefinder:0.1.0 .       # Image bauen (erster Build einige Minuten)
 docker history placefinder:0.1.0             # Schichten mit Größe
-docker run --rm -p 8000:8000 placefinder:0.1.0
+docker run --rm --publish 8000:8000 placefinder:0.1.0
 curl "http://localhost:8000/places?q=Erfurt" # in einem zweiten Terminal
 ```
 
@@ -149,7 +149,7 @@ Die Daten gehören damit zum Image (rund 8 MB). So startet der Container überal
 Zum Vergleich ein Image mit nur einer Stufe auf Basis von `python:3.14` bauen (ohne Daten, nur für den Größenvergleich):
 
 ```bash
-docker build -t placefinder:single -f - . <<'EOF'
+docker build --tag placefinder:single --file - . <<'EOF'
 FROM python:3.14
 COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /bin/uv
 WORKDIR /app
@@ -163,7 +163,7 @@ trivy image --severity HIGH,CRITICAL placefinder:single
 ```
 
 Fehlt `trivy` im Dev Container, geht es auch mit dem Image von Trivy:
-`docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.1.0`
+`docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.1.0`
 (feste Version: Einige Trivy-Images vom März 2026 waren manipuliert, deshalb nie ohne Tag)
 
 ### Trivy-Bericht lesen
@@ -182,7 +182,7 @@ Die Python-Funde des Basis-Images (`msgpack`, `urllib3`, `setuptools`) stammen a
 
 ```bash
 trivy image --format json placefinder:0.1.0 \
-  | jq -r '.Results[] | .Vulnerabilities[]? | "\(.PkgName) \(.InstalledVersion) \(.PkgPath // "-")"'
+  | jq --raw-output '.Results[] | .Vulnerabilities[]? | "\(.PkgName) \(.InstalledVersion) \(.PkgPath // "-")"'
 ```
 
 Nur Funde mit verfügbarer Korrektur zeigt `trivy image --ignore-unfixed …` – so wird in CI-Pipelines oft geprüft (Termin 8). Weniger Funde haben Basis-Images mit weniger Paketen, etwa Distroless-Images.
@@ -193,8 +193,8 @@ Optional in Termin 2, nötig ab Termin 3 (die Container-Dienste laden das Image 
 
 ```bash
 gh auth login                                 # einmalig, falls noch nicht angemeldet
-gh auth refresh -s write:packages             # Recht zum Hochladen von Paketen
-gh auth token | docker login ghcr.io -u <github-user> --password-stdin
+gh auth refresh --scopes write:packages       # Recht zum Hochladen von Paketen
+gh auth token | docker login ghcr.io --username <github-user> --password-stdin
 docker tag placefinder:0.1.0 ghcr.io/<github-user>/placefinder:t02
 docker push ghcr.io/<github-user>/placefinder:t02
 ```
@@ -213,28 +213,28 @@ Ein neues Paket ist zunächst privat. Für Termin 3 auf GitHub unter *Packages* 
 ```bash
 cd /workspaces/placefinder                    # compose.yaml liegt hier
 docker ps                                     # läuft noch ein Container auf Port 8000? stoppen
-docker compose up -d                          # bauen (falls nötig) und starten
+docker compose up --detach                    # bauen (falls nötig) und starten
 docker compose ps                             # web: healthy, api: running
 curl http://localhost:8080/                   # Startseite von web, liegt im Volume
 docker compose exec api python -c "import urllib.request; print(urllib.request.urlopen('http://web:8080/').read().decode())"
 docker compose exec web sh -c 'echo "Changed" > /www/index.html'
 docker compose down                           # Container und Netz weg, das Volume www bleibt
-docker compose up -d
+docker compose up --detach
 curl http://localhost:8080/                   # zeigt weiter "Changed"
-docker compose down -v                        # zusätzlich das Volume löschen
+docker compose down --volumes                 # zusätzlich das Volume löschen
 ```
 
 - **Netz:** Der Aufruf aus `api` erreicht `web` über den Dienstnamen als Hostnamen (`http://web:8080/`); Port 8080 auf dem Rechner braucht er dafür nicht.
 - **Reihenfolge:** `api` startet erst, wenn `web` den Healthcheck besteht (`wget` auf die Startseite).
-- **Volume:** `web` legt die Startseite beim ersten Start im Volume `www` an. Änderungen überstehen `docker compose down`; erst `down -v` löscht sie.
+- **Volume:** `web` legt die Startseite beim ersten Start im Volume `www` an. Änderungen überstehen `docker compose down`; erst `down --volumes` löscht sie.
 
 Häufige Fehler:
 
 | Meldung | Ursache | Abhilfe |
 |---|---|---|
 | `no configuration file provided: not found` | Das Terminal steht nicht im Verzeichnis mit `compose.yaml` (neue Terminals öffnen im Übungs-Repository). | `cd /workspaces/placefinder` |
-| `Bind for 0.0.0.0:8000 failed: port is already allocated` | Ein anderer Container belegt Port 8000, meist der aus `docker run` der Übung. | `docker ps`, den Container mit `docker stop <name>` beenden, dann `docker compose up -d` |
-| `Temporary failure in name resolution` beim Aufruf von `web` | Der Container `api` hat nach einem fehlgeschlagenen Start kein vollständiges Netz. | `docker compose down`, dann `docker compose up -d` |
+| `Bind for 0.0.0.0:8000 failed: port is already allocated` | Ein anderer Container belegt Port 8000, meist der aus `docker run` der Übung. | `docker ps`, den Container mit `docker stop <name>` beenden, dann `docker compose up --detach` |
+| `Temporary failure in name resolution` beim Aufruf von `web` | Der Container `api` hat nach einem fehlgeschlagenen Start kein vollständiges Netz. | `docker compose down`, dann `docker compose up --detach` |
 
 ## Entwicklung
 

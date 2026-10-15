@@ -4,13 +4,13 @@
 #   name: cities15000 (default), cities5000, cities1000, DE, allCountries ...
 #   (list: https://download.geonames.org/export/dump/)
 # GeoNames data is licensed under CC BY 4.0: https://www.geonames.org
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 
 name="${1:-cities15000}"
 cd "$(dirname "$0")"
 
 echo "Downloading $name.zip from GeoNames ..."
-curl -fsSL -o "$name.zip" "https://download.geonames.org/export/dump/$name.zip"
-python3 -m zipfile -e "$name.zip" .
+curl --fail --silent --show-error --location --output "$name.zip" "https://download.geonames.org/export/dump/$name.zip"
+python3 -m zipfile --extract "$name.zip" .
 rm "$name.zip"
-echo "Done: data/$name.txt with $(wc -l <"$name.txt") places"
+echo "Done: data/$name.txt with $(wc --lines <"$name.txt") places"

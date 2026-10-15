@@ -10,7 +10,7 @@
 #                 as on the VM in session 2 (default: fastapi dev)
 #   -h, --help    show this help
 # The environment variable DATA_FILE overrides --data.
-set -euo pipefail
+set -o errexit -o nounset -o pipefail
 
 cd "$(dirname "$0")"
 
@@ -49,7 +49,7 @@ if ! command -v uv >/dev/null 2>&1; then
   [[ $where == WSL ]] || die "uv not found. Rebuild the dev container."
   read -r -p "uv is not installed. Install it now into ~/.local/bin? [y/N] " answer
   [[ "$answer" =~ ^[yYjJ] ]] || die "PlaceFinder needs uv: https://docs.astral.sh/uv/"
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  curl --location --silent --show-error --fail https://astral.sh/uv/install.sh | sh
 fi
 
 # GeoNames data (CC BY 4.0)

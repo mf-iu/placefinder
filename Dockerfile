@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # PlaceFinder image: GeoNames data, virtual environment, unprivileged runtime.
-# Build: docker build -t placefinder:0.1.0 .
-# Run:   docker run --rm -p 8000:8000 placefinder:0.1.0
+# Build: docker build --tag placefinder:0.1.0 .
+# Run:   docker run --rm --publish 8000:8000 placefinder:0.1.0
 
 # GeoNames dump that is baked into the image, e.g. cities5000 or DE
 ARG GEONAMES_FILE=cities15000
@@ -13,7 +13,7 @@ WORKDIR /data
 # the slim image has no curl or unzip, Python does both
 RUN python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], 'data.zip')" \
       "https://download.geonames.org/export/dump/${GEONAMES_FILE}.zip" \
- && python -m zipfile -e data.zip . \
+ && python -m zipfile --extract data.zip . \
  && rm data.zip
 
 # ---- Stage 2: build the virtual environment ----
@@ -43,7 +43,7 @@ COPY --from=build /app/.venv /app/.venv
 COPY --from=data /data /data
 ENV DATA_FILE=/data/${GEONAMES_FILE}.txt
 USER app
-# document the port; publish it with docker run -p
+# document the port; publish it with docker run --publish
 EXPOSE 8000
 # exec form: uvicorn runs as PID 1 and receives signals
 CMD ["/app/.venv/bin/uvicorn", "placefinder.main:app", "--host", "0.0.0.0", "--port", "8000"]
