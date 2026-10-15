@@ -6,7 +6,7 @@ Beispielanwendung des Kurses „Cloud Computing“: ein Dienst zur Ortssuche auf
 
 ## Einrichtung
 
-Voraussetzung ist der Dev Container eines Übungs-Repositorys (`cloud-labs-aws`, `cloud-labs-azure` oder `cloud-labs-gcp`, siehe dessen README). Ohne Dev Container genügen Python ab 3.12 und [uv](https://docs.astral.sh/uv/).
+Voraussetzung ist der Dev Container eines Übungs-Repositorys (`cloud-labs-aws`, `cloud-labs-azure` oder `cloud-labs-gcp`, siehe dessen README). Ohne Dev Container genügt die Ubuntu-Shell in WSL: `start.sh` installiert [uv](https://docs.astral.sh/uv/) bei Bedarf, uv lädt ein passendes Python.
 
 1. **Forken:** Das Repository auf GitHub forken; eigene Pipelines und das Abschlussprojekt laufen im Fork. Beim Forken **„Copy the master branch only“ abwählen** – sonst fehlen im Fork die Tags der Ausbaustufen, die die Übungen verwenden.
 2. **Klonen:** in Ubuntu (WSL) neben das Übungs-Repository:
@@ -15,13 +15,30 @@ Voraussetzung ist der Dev Container eines Übungs-Repositorys (`cloud-labs-aws`,
    git clone https://github.com/<github-user>/placefinder.git
    ```
    Im Dev Container liegt das Repository dann unter `/workspaces/placefinder`.
-3. **Daten laden und starten:** im Terminal des Dev Containers:
+3. **Starten:** im Terminal des Dev Containers
    ```bash
    cd /workspaces/placefinder
+   ./start.sh
+   ```
+   oder in der Ubuntu-Shell von WSL
+   ```bash
+   cd ~/kurs/placefinder
+   ./start.sh
+   ```
+   `start.sh` lädt beim ersten Aufruf die GeoNames-Datei `cities15000` nach `data/` und startet den Entwicklungsserver auf Port 8000. Beim ersten Start legt uv eine virtuelle Umgebung an und installiert die Abhängigkeiten genau in den Versionen aus `uv.lock`: im Dev Container unter `.venv`, in WSL unter `~/.cache/placefinder/venv`, damit sich beide Umgebungen nicht gegenseitig überschreiben. `fastapi dev` lädt die Anwendung bei jeder Änderung am Code neu.
+
+   | Aufruf | Wirkung |
+   |---|---|
+   | `./start.sh --data cities5000` | andere GeoNames-Datei laden und verwenden |
+   | `./start.sh --port 8001` | anderer Port, z. B. wenn schon ein Server auf 8000 läuft |
+   | `./start.sh --prod` | ohne Neuladen und ohne Entwicklungswerkzeuge, wie auf der VM in Termin 2 |
+   | `./start.sh --help` | alle Optionen |
+
+   Von Hand geht es so (im Dev Container):
+   ```bash
    data/download.sh                             # GeoNames cities15000 nach data/
    uv run fastapi dev src/placefinder/main.py   # Entwicklungsserver auf Port 8000
    ```
-   Beim ersten `uv run` legt uv die virtuelle Umgebung `.venv` an und installiert die Abhängigkeiten genau in den Versionen aus `uv.lock`. `fastapi dev` lädt die Anwendung bei jeder Änderung am Code neu.
 
 ## Ausprobieren
 
@@ -53,7 +70,7 @@ Alternative Namen machen auch deutsche Namen auffindbar: GeoNames führt Münche
 |---|---|---|
 | `DATA_FILE` | `data/cities15000.txt` (relativ zum Arbeitsverzeichnis) | GeoNames-Datei, die beim Start geladen wird |
 
-Fehlt die Datei, bricht der Start mit einer Meldung ab. `data/download.sh` lädt auch andere GeoNames-Dateien, z. B. `data/download.sh cities5000` (Orte ab 5.000 Einwohnern) oder `data/download.sh DE` (alle Einträge für Deutschland, auch Berge, Gewässer usw.); dann `DATA_FILE=data/DE.txt uv run fastapi dev src/placefinder/main.py`. Größere Dateien brauchen entsprechend mehr Speicher und Startzeit. Mit `cities15000` belegt PlaceFinder rund 130 MB Arbeitsspeicher und startet in etwa einer Sekunde.
+Fehlt die Datei, bricht der Start mit einer Meldung ab. `data/download.sh` lädt auch andere GeoNames-Dateien, z. B. `data/download.sh cities5000` (Orte ab 5.000 Einwohnern) oder `data/download.sh DE` (alle Einträge für Deutschland, auch Berge, Gewässer usw.); dann `DATA_FILE=data/DE.txt uv run fastapi dev src/placefinder/main.py` oder kurz `./start.sh --data DE`. Größere Dateien brauchen entsprechend mehr Speicher und Startzeit. Mit `cities15000` belegt PlaceFinder rund 130 MB Arbeitsspeicher und startet in etwa einer Sekunde.
 
 **Betrieb ohne Entwicklungsserver** (so richtet cloud-init in Termin 2 die VM ein):
 
@@ -71,6 +88,7 @@ uv run ruff format      # Formatierung
 ```
 
 ```
+start.sh                    # starts the server locally (WSL or dev container)
 src/placefinder/main.py     # FastAPI app: endpoints, loading the data at startup
 src/placefinder/places.py   # Place, GeoNames parser, in-memory repository with name index
 data/download.sh            # downloads GeoNames dumps; data files are not committed
