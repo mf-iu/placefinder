@@ -141,7 +141,7 @@ Das `Dockerfile` hat drei Stufen:
 | `build` | installiert mit uv die Abhängigkeiten genau nach `uv.lock`, dann PlaceFinder selbst als Paket |
 | Runtime | übernimmt nur die virtuelle Umgebung und die Daten, entfernt pip, läuft als Benutzer `app` ohne root |
 
-Die Daten gehören damit zum Image (rund 8 MB). So startet der Container überall ohne Download, auch auf den Serverless-Container-Diensten in Termin 3; aktuelle Daten gibt es mit einem neuen Build. Eine andere Datei wählt `--build-arg GEONAMES_FILE=cities5000`. `.dockerignore` hält `.git`, `.venv`, `data/` und `tests/` aus dem Build-Kontext heraus.
+Die Daten gehören damit zum Image (rund 8 MB). So startet der Container überall ohne Download, auch auf den Serverless-Container-Diensten in Termin 3; aktuelle Daten gibt es mit einem neuen Build. Eine andere Datei wählt `--build-arg GEONAMES_FILE=cities5000`. `.dockerignore` hält `.git`, `.venv`, `data/`, `tests/` und ab `t03` auch `deploy/` aus dem Build-Kontext heraus.
 
 Ändert sich nur der Code unter `src/`, baut Docker nur die letzten Schichten neu; ändert sich `uv.lock`, auch die Abhängigkeiten.
 
@@ -173,20 +173,20 @@ Trivy listet die Funde je Ziel: die Pakete des Betriebssystems (`debian`) und Py
 
 | Status | Bedeutung | Was tun? |
 |---|---|---|
-| `fixed` | Es gibt eine korrigierte Version (*Fixed Version*). | Paket bzw. Basis-Image aktualisieren und neu bauen |
+| `fixed` | Es gibt eine korrigierte Version (*Fixed Version*). | Paket bzw. Base-Image aktualisieren und neu bauen |
 | `affected` | Betroffen, aber noch keine Korrektur verfügbar. | abwarten; später mit `docker build --pull` neu bauen |
 | `fix_deferred` | Die Distribution hat die Korrektur zurückgestellt, meist wegen geringer Auswirkung. | prüfen, ob die Anwendung das Paket überhaupt nutzt |
 
-Bei PlaceFinder (Stand `t02`) sind alle Python-Pakete der virtuellen Umgebung ohne Befund. Die Funde im Debian-Teil des Basis-Images (z. B. `util-linux`, `ncurses`, `systemd`) haben keine *Fixed Version*. PlaceFinder nutzt diese Programme nicht, und der Container läuft ohne root – die Funde sind vorhanden, aber praktisch nicht erreichbar.
+Bei PlaceFinder (Stand `t02`) sind alle Python-Pakete der virtuellen Umgebung ohne Befund. Die Funde im Debian-Teil des Base-Images (z. B. `util-linux`, `ncurses`, `systemd`) haben keine *Fixed Version*. PlaceFinder nutzt diese Programme nicht, und der Container läuft ohne root – die Funde sind vorhanden, aber praktisch nicht erreichbar.
 
-Die Python-Funde des Basis-Images (`msgpack`, `urllib3`, `setuptools`) stammen aus pip, das diese Pakete in sich mitbringt. Zur Laufzeit wird pip nicht gebraucht; die Runtime-Stufe entfernt es deshalb. Prüfen lässt sich die Herkunft eines Funds über den Pfad im JSON-Bericht:
+Die Python-Funde des Base-Images (`msgpack`, `urllib3`, `setuptools`) stammen aus pip, das diese Pakete in sich mitbringt. Im laufenden Container wird pip nicht gebraucht; die Runtime-Stufe entfernt es deshalb. Prüfen lässt sich die Herkunft eines Funds über den Pfad im JSON-Bericht:
 
 ```bash
 trivy image --format json placefinder:0.1.0 \
   | jq --raw-output '.Results[] | .Vulnerabilities[]? | "\(.PkgName) \(.InstalledVersion) \(.PkgPath // "-")"'
 ```
 
-Nur Funde mit verfügbarer Korrektur zeigt `trivy image --ignore-unfixed …` – so wird in CI-Pipelines oft geprüft (Termin 8). Weniger Funde haben Basis-Images mit weniger Paketen, etwa Distroless-Images.
+Nur Funde mit verfügbarer Korrektur zeigt `trivy image --ignore-unfixed …` – so wird in CI-Pipelines oft geprüft (Termin 8). Weniger Funde haben Base-Images mit weniger Paketen, etwa Distroless-Images.
 
 ### Image in die GitHub Container Registry laden
 
