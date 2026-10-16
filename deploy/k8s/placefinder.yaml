@@ -1,0 +1,55 @@
+# PlaceFinder on Kubernetes: Deployment, Service and ConfigMap (session 3).
+# Apply:   kubectl apply --filename deploy/k8s/
+# Remove:  kubectl delete --filename deploy/k8s/
+# The image placefinder:<version> is built locally and imported into the
+# k3d cluster (cloud-labs: t03-container/build-image.sh).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: placefinder
+  labels: {app: placefinder}
+spec:
+  replicas: 3                       # desired number of pods
+  selector:                         # which pods belong to the deployment
+    matchLabels: {app: placefinder}
+  template:                         # blueprint of each pod
+    metadata:
+      labels: {app: placefinder}    # must match the selector
+    spec:
+      containers:
+        - name: api
+          image: placefinder:0.1.0  # fixed version tag, never latest
+          ports:
+            - containerPort: 8000   # port of the application
+          envFrom:                  # all keys of the ConfigMap as variables
+            - configMapRef: {name: placefinder}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}  # reserved for scheduling
+            limits: {memory: 256Mi}               # killed above (OOMKilled)
+          readinessProbe:           # requests only when ready
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 5
+          livenessProbe:            # restart if it hangs
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 10
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: placefinder                 # DNS name inside the cluster
+  labels: {app: placefinder}
+spec:
+  selector: {app: placefinder}      # target pods
+  ports:
+    - port: 80                      # port of the service
+      targetPort: 8000              # port of the container
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: placefinder
+  labels: {app: placefinder}
+data:                               # plain settings, read at container start
+  LOG_LEVEL: info
+  DATA_FILE: /data/cities15000.txt

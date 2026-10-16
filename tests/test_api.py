@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -87,3 +89,9 @@ def test_startup_fails_without_data_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DATA_FILE", str(tmp_path / "missing.txt"))
     with pytest.raises(RuntimeError, match="data/download.sh"), TestClient(app):
         pass
+
+
+def test_search_logs_at_debug_level(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG, logger="uvicorn.error")
+    client.get("/places", params={"q": "Erfurt"})
+    assert "Search 'Erfurt': 1 of at most 10 places" in caplog.text

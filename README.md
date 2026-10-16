@@ -2,7 +2,7 @@
 
 Beispielanwendung des Kurses „Cloud Computing“: ein Dienst zur Ortssuche auf Basis von GeoNames, später ergänzt um OpenStreetMap. PlaceFinder wächst von Termin zu Termin; jeder Stand ist als Git-Tag verfügbar.
 
-**Stand v0 (Tags `t01` und `t02`):** eine FastAPI-Anwendung, die beim Start die GeoNames-Datei `cities15000` (alle Orte ab 15.000 Einwohnern, rund 34.000) in den Speicher lädt und nach Namen durchsucht. Ab `t02` gibt es dazu ein Container-Image und eine `compose.yaml`, die PlaceFinder zusammen mit einem kleinen Übungsdienst startet (Abschnitt [Container](#container)). Eine Datenbank folgt in Termin 6.
+**Stand v0 (Tags `t01` bis `t03`):** eine FastAPI-Anwendung, die beim Start die GeoNames-Datei `cities15000` (alle Orte ab 15.000 Einwohnern, rund 34.000) in den Speicher lädt und nach Namen durchsucht. Ab `t02` gibt es dazu ein Container-Image und eine `compose.yaml`, die PlaceFinder zusammen mit einem kleinen Übungsdienst startet (Abschnitt [Container](#container)). Ab `t03` liegen unter `deploy/` Manifeste für Kubernetes und ein Helm-Chart (Abschnitt [Kubernetes](#kubernetes)). Eine Datenbank folgt in Termin 6.
 
 ## Einrichtung
 
@@ -69,6 +69,7 @@ Alternative Namen machen auch deutsche Namen auffindbar: GeoNames führt Münche
 | Umgebungsvariable | Standard | Bedeutung |
 |---|---|---|
 | `DATA_FILE` | `data/cities15000.txt` (relativ zum Arbeitsverzeichnis) | GeoNames-Datei, die beim Start geladen wird |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warning` oder `error`; mit `debug` erscheint jede Suche im Log |
 
 Fehlt die Datei, bricht der Start mit einer Meldung ab. `data/download.sh` lädt auch andere GeoNames-Dateien, z. B. `data/download.sh cities5000` (Orte ab 5.000 Einwohnern) oder `data/download.sh DE` (alle Einträge für Deutschland, auch Berge, Gewässer usw.); dann `DATA_FILE=data/DE.txt uv run fastapi dev src/placefinder/main.py` oder kurz `./start.sh --data DE`. Größere Dateien brauchen entsprechend mehr Speicher und Startzeit. Mit `cities15000` belegt PlaceFinder rund 130 MB Arbeitsspeicher und startet in etwa einer Sekunde.
 
@@ -189,7 +190,7 @@ Nur Funde mit verfügbarer Korrektur zeigt `trivy image --ignore-unfixed …` �
 
 ### Image in die GitHub Container Registry laden
 
-Optional in Termin 2, nötig ab Termin 3 (die Container-Dienste laden das Image von dort):
+Optional in Termin 2, nötig ab Termin 3 (die Container-Dienste laden das Image von dort). Ab Termin 3 erledigt das `t03-container/build-image.sh --push` im Übungs-Repository; von Hand:
 
 ```bash
 gh auth login                                 # einmalig, falls noch nicht angemeldet
@@ -236,6 +237,79 @@ Häufige Fehler:
 | `Bind for 0.0.0.0:8000 failed: port is already allocated` | Ein anderer Container belegt Port 8000, meist der aus `docker run` der Übung. | `docker ps`, den Container mit `docker stop <name>` beenden, dann `docker compose up --detach` |
 | `Temporary failure in name resolution` beim Aufruf von `web` | Der Container `api` hat nach einem fehlgeschlagenen Start kein vollständiges Netz. | `docker compose down`, dann `docker compose up --detach` |
 
+## Kubernetes
+
+Ab Tag `t03`. Der Cluster läuft lokal mit k3d im Dev Container. Anlegen, Image bauen und Löschen übernehmen Skripte im Übungs-Repository unter `t03-container`: `cluster-up.sh`, `build-image.sh` und `cluster-down.sh` (Anleitung im README dort).
+
+| Datei | Inhalt |
+|---|---|
+| `deploy/k8s/placefinder.yaml` | Deployment mit drei Replikaten, Probes, Requests und Limit; Service; ConfigMap – Musterlösung der Übung |
+| `deploy/hpa.yaml` | Horizontal Pod Autoscaler (Zusatzaufgabe) |
+| `deploy/helm/placefinder/` | Helm-Chart mit denselben drei Objekten |
+| `deploy/helm/values-dev.yaml`, `values-prod.yaml` | Werte je Umgebung für das Chart |
+
+### Manifest anwenden
+
+```bash
+cd /workspaces/placefinder
+kubectl apply --filename deploy/k8s/
+kubectl get pods --output wide                 # drei Pods, verteilt auf die Nodes
+kubectl port-forward svc/placefinder 8000:80   # läuft weiter; zweites Terminal öffnen
+curl "http://localhost:8000/places?q=Erfurt"
+```
+
+`port-forward` verbindet mit genau einem Pod. Wird dieser Pod ersetzt (Update, Löschen), bricht die Verbindung ab; dann den Befehl erneut starten.
+
+### Neue Version ausrollen
+
+```bash
+uv version 0.1.1 --no-sync                          # Version in pyproject.toml und uv.lock
+../cloud-labs-<anbieter>/t03-container/build-image.sh   # baut placefinder:0.1.1, lädt es in den Cluster
+kubectl set image deployment/placefinder api=placefinder:0.1.1
+kubectl rollout status deployment/placefinder
+curl http://localhost:8000/                         # "version": "0.1.1"
+kubectl rollout undo deployment/placefinder         # zurück zu 0.1.0
+git restore pyproject.toml uv.lock                  # Version im Repository wieder 0.1.0
+```
+
+### Konfiguration ändern
+
+Die ConfigMap liefert `LOG_LEVEL` und `DATA_FILE` als Umgebungsvariablen. PlaceFinder liest sie nur beim Start, deshalb startet `rollout restart` die Pods neu:
+
+```bash
+# in deploy/k8s/placefinder.yaml: LOG_LEVEL: debug
+kubectl apply --filename deploy/k8s/
+kubectl rollout restart deployment/placefinder
+kubectl logs deployment/placefinder --follow       # nach einer Suche: "Search 'Erfurt': …"
+```
+
+### Helm
+
+Das Chart erzeugt dieselben Objekte, benannt nach dem Release: Release `pf` → `pf-placefinder`. Es stört das Manifest aus `deploy/k8s/` deshalb nicht.
+
+```bash
+helm lint deploy/helm/placefinder
+helm template pf deploy/helm/placefinder --values deploy/helm/values-dev.yaml   # nur anzeigen
+helm upgrade --install pf deploy/helm/placefinder --values deploy/helm/values-dev.yaml
+helm upgrade --install pf deploy/helm/placefinder --values deploy/helm/values-prod.yaml
+helm history pf                                     # zwei Revisionen
+helm rollback pf 1                                  # zurück zu den dev-Werten
+helm uninstall pf
+```
+
+Die Annotation `checksum/config` im Deployment ändert sich mit der ConfigMap; deshalb startet `helm upgrade` die Pods neu, wenn sich nur die Konfiguration ändert. Mit `--set image.repository=ghcr.io/<github-user>/placefinder` laden die Nodes das Image aus der GitHub Container Registry statt des importierten.
+
+### Autoscaler (Zusatz)
+
+```bash
+kubectl apply --filename deploy/hpa.yaml
+kubectl get hpa --watch                             # zweites Terminal
+kubectl run load --rm --stdin --tty --image=busybox:1.37 -- \
+  sh -c 'while true; do wget --quiet --output-document /dev/null "http://placefinder/places?q=B"; done'
+```
+
+Mit Last steigt die Zahl der Replikate auf bis zu sechs; nach dem Ende der Last (Ctrl+C) sinkt sie nach etwa fünf Minuten wieder auf zwei. Achtung: Ein erneutes `kubectl apply --filename deploy/k8s/` setzt die Replikate zunächst auf drei zurück, danach regelt der HPA wieder. Entfernen: `kubectl delete --filename deploy/hpa.yaml`.
+
 ## Entwicklung
 
 ```bash
@@ -248,6 +322,9 @@ uv run ruff format      # Formatierung
 start.sh                    # starts the server locally (WSL or dev container)
 Dockerfile, .dockerignore   # container image with the GeoNames data (from t02)
 compose.yaml                # PlaceFinder and a small practice service (from t02)
+deploy/k8s/                 # Kubernetes manifests (from t03)
+deploy/hpa.yaml             # Horizontal Pod Autoscaler (from t03)
+deploy/helm/                # Helm chart and values per environment (from t03)
 src/placefinder/main.py     # FastAPI app: endpoints, loading the data at startup
 src/placefinder/places.py   # Place, GeoNames parser, in-memory repository with name index
 data/download.sh            # downloads GeoNames dumps; data files are not committed
@@ -262,8 +339,9 @@ Code, Kommentare und Commit-Messages sind auf Englisch.
 |---|---|
 | `t01` | v0: Ortssuche über `cities15000` im Speicher (`/places?q=…`, `/places/{id}`) |
 | `t02` | v0 als Container-Image (`Dockerfile` mit den GeoNames-Daten), `compose.yaml` mit einem Übungsdienst |
+| `t03` | Kubernetes-Manifeste, Autoscaler und Helm-Chart unter `deploy/`; Log-Level über `LOG_LEVEL` |
 
-Die weiteren Stände folgen als Tags `t03`, `t04` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
+Die weiteren Stände folgen als Tags `t04`, `t05` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
 
 ## Daten und Lizenz
 

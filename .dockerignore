@@ -10,3 +10,4 @@ __pycache__/
 # the image downloads its own data in the Dockerfile
 data/
 tests/
+deploy/

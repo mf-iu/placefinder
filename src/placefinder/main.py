@@ -2,6 +2,7 @@
 
 Start for development:  uv run fastapi dev src/placefinder/main.py
 Start for production:   uvicorn placefinder.main:app --host 0.0.0.0 --port 8000
+Settings: DATA_FILE (GeoNames text file), LOG_LEVEL (default info)
 """
 
 import logging
@@ -23,6 +24,8 @@ ATTRIBUTION = "Place data: GeoNames (https://www.geonames.org), CC BY 4.0"
 
 # uvicorn configures this logger, so its messages appear in the server output
 logger = logging.getLogger("uvicorn.error")
+# level from the environment, e.g. a Kubernetes ConfigMap: debug, info, warning, error
+logger.setLevel(os.environ.get("LOG_LEVEL", "info").upper())
 repo = PlaceRepository()
 
 
@@ -70,7 +73,9 @@ def search_places(
 
     Exact matches come first, then larger places.
     """
-    return repo.search(q, limit)
+    places = repo.search(q, limit)
+    logger.debug("Search %r: %d of at most %d places", q, len(places), limit)
+    return places
 
 
 @app.get("/places/{place_id}", responses={404: {"description": "Place not found"}})

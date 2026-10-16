@@ -1,0 +1,6 @@
+# Production: three pods, only warnings and errors in the log
+# helm upgrade --install pf deploy/helm/placefinder --values deploy/helm/values-prod.yaml
+# Image from the GitHub Container Registry instead of the imported one:
+#   --set image.repository=ghcr.io/<user>/placefinder
+replicaCount: 3
+logLevel: warning

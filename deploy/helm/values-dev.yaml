@@ -1,0 +1,4 @@
+# Development: one pod, every search in the log
+# helm upgrade --install pf deploy/helm/placefinder --values deploy/helm/values-dev.yaml
+replicaCount: 1
+logLevel: debug

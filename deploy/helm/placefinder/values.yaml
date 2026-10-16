@@ -1,0 +1,18 @@
+# Default values of the chart; values-dev.yaml and values-prod.yaml next to
+# the chart override some of them, --set overrides single values.
+replicaCount: 3
+
+image:
+  repository: placefinder   # imported into k3d; or ghcr.io/<user>/placefinder
+  tag: ""                   # empty: appVersion from Chart.yaml
+  pullPolicy: IfNotPresent
+
+logLevel: info
+dataFile: /data/cities15000.txt
+
+service:
+  port: 80
+
+resources:
+  requests: {cpu: 100m, memory: 128Mi}
+  limits: {memory: 256Mi}
