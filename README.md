@@ -4,7 +4,9 @@ Beispielanwendung des Kurses „Cloud Computing“: ein Dienst zur Ortssuche auf
 
 **Stand v0 (Tags `t01` bis `t03`):** eine FastAPI-Anwendung, die beim Start die GeoNames-Datei `cities15000` (alle Orte ab 15.000 Einwohnern, rund 34.000) in den Speicher lädt und nach Namen durchsucht. Ab `t02` gibt es dazu ein Container-Image und eine `compose.yaml`, die PlaceFinder zusammen mit einem kleinen Übungsdienst startet (Abschnitt [Container](#container)). Ab `t03` liegen unter `deploy/` Manifeste für Kubernetes und ein Helm-Chart (Abschnitt [Kubernetes](#kubernetes)).
 
-**Stand v1 (Tag `t05`, Version 0.5.0):** eine REST-API unter `/v1` mit GeoJSON, Suche nach Name, Umkreis, Bounding Box und Land, Cursor-Paginierung, Caching-Headern, ETags und Fehlern nach RFC 9457 (Abschnitt [REST-API v1](#rest-api-v1)), dazu eine Karte mit MapLibre GL JS (Abschnitt [Karte](#karte)). Die Endpunkte von v0 bleiben vorerst erreichbar, sind aber als veraltet markiert. Die Daten liegen weiter im Speicher; eine Datenbank folgt in Termin 6.
+**Stand v1 (Tag `t05`, Version 0.5.0):** eine REST-API unter `/v1` mit GeoJSON, Suche nach Name, Umkreis, Bounding Box und Land, Cursor-Paginierung, Caching-Headern, ETags und Fehlern nach RFC 9457 (Abschnitt [REST-API v1](#rest-api-v1)), dazu eine Karte mit MapLibre GL JS (Abschnitt [Karte](#karte)). Die Endpunkte von v0 bleiben vorerst erreichbar, sind aber als veraltet markiert.
+
+**Stand mit Datenbank (Tag `t06`, Version 0.6.0):** Ist `DATABASE_URL` gesetzt, liest PlaceFinder die Orte aus PostgreSQL mit PostGIS statt aus der Datei im Speicher – dieselbe API, dieselben Antworten (Abschnitt [Datenbank](#datenbank)). `compose.yaml` enthält dafür den Dienst `db`. Ohne `DATABASE_URL` arbeitet PlaceFinder wie bisher mit der Datei.
 
 ## Einrichtung
 
@@ -143,11 +145,45 @@ python3 -m http.server 5173 --directory frontend        # Terminal 2: Karte auf 
 
 Im Browser http://localhost:5173 öffnen. Karte und API haben verschiedene Herkünfte (Port 5173 und 8000); die API erlaubt die Karte über CORS (`CORS_ORIGINS`). Mit `?api=https://…` zeigt die Karte die Daten einer anderen Instanz, etwa des Dienstes beim eigenen Anbieter.
 
+## Datenbank
+
+Ab Tag `t06`. Musterlösung zu Termin 6: `src/placefinder/db.py` liest die Orte aus der Tabelle `places` in PostgreSQL mit PostGIS. Die Tabelle legt `load-cities.sh` aus dem Übungs-Repository an (`t06-datenbank`): die Spalten der GeoNames-Datei, die Spalte `geom` vom Typ `geography` mit GiST-Index und Trigramm-Indizes für die Namen.
+
+```bash
+cd /workspaces/placefinder
+docker compose up --detach db                          # PostGIS lokal, Port 5432 nur auf diesem Rechner
+export DATABASE_URL=postgresql://pf:pf@localhost:5432/pf
+../cloud-labs-<anbieter>/t06-datenbank/load-cities.sh  # Tabelle places mit cities15000
+uv run fastapi dev src/placefinder/main.py             # meldet: Using PostGIS at localhost:5432/pf
+```
+
+Dieselbe Variable mit der Verbindungszeichenkette aus `create-db.sh` verbindet PlaceFinder mit der Datenbank beim eigenen Anbieter; `t06-datenbank/test-api.sh` startet PlaceFinder so und prüft die API mit dem Smoke-Test aus Termin 5.
+
+| Parameter | Abfrage in PostGIS | Index |
+|---|---|---|
+| `lon`, `lat`, `radius` | `ST_DWithin(geom, punkt, radius)`, Abstand mit `ST_Distance` | GiST auf `geom` |
+| `q` | alle Namen in einem Text, `LIKE '%,erf%'`; ein gleicher Name zählt vor einem Präfix | Trigramme auf allen Namen (`places_all_names_trgm_idx`) |
+| `bbox` | `longitude BETWEEN … AND latitude BETWEEN …` – ein Rechteck in Grad, keine Großkreise | keiner |
+| `country` | `country_code = …` | keiner |
+| `cursor` | Zeilenvergleich `(k0, k1) > (…)` mit dem Sortierschlüssel des letzten Orts | – |
+
+- **Repository:** `api.py` fragt eine Schnittstelle (`repository.py`): `find`, `get` und `count`. `PlaceRepository` (`places.py`) erfüllt sie im Speicher, `PostgisRepository` (`db.py`) in der Datenbank. Die Wahl trifft `main.py` beim Start.
+- **Verbindungen:** psycopg 3 mit einem Pool aus bis zu vier Verbindungen; geöffnet und geschlossen in der Lifespan-Funktion. Fehlen Datenbank oder Tabelle, bricht der Start mit einer Meldung ab. Antwortet die Datenbank später nicht, liefert die API `503` mit `Retry-After` als Problem Details.
+- **Parameter:** Alle Werte gehen als Platzhalter (`%(name)s`) getrennt vom SQL-Text an den Server – Schutz vor SQL-Injection.
+- **`/health`:** meldet die geschätzte Zahl der Orte (`reltuples`); ein `count(*)` läse bei jedem Health Check die ganze Tabelle.
+
+**Tests gegen PostGIS:** Mit `TEST_DATABASE_URL` laufen alle API-Tests ein zweites Mal gegen PostGIS. Die Tests legen ein eigenes Schema mit den Beispielorten an und löschen es danach.
+
+```bash
+TEST_DATABASE_URL=postgresql://pf:pf@localhost:5432/pf uv run pytest
+```
+
 ## Konfiguration
 
 | Umgebungsvariable | Standard | Bedeutung |
 |---|---|---|
-| `DATA_FILE` | `data/cities15000.txt` (relativ zum Arbeitsverzeichnis) | GeoNames-Datei, die beim Start geladen wird |
+| `DATABASE_URL` | – | ab `t06`: PostgreSQL mit PostGIS statt der Datei, z. B. `postgresql://pf:pf@localhost:5432/pf` |
+| `DATA_FILE` | `data/cities15000.txt` (relativ zum Arbeitsverzeichnis) | GeoNames-Datei, die beim Start geladen wird, wenn `DATABASE_URL` fehlt |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warning` oder `error`; mit `debug` erscheint jede Suche im Log |
 | `CORS_ORIGINS` | `http://localhost:5173` | Herkünfte (Schema, Host, Port) von Webseiten, die die API im Browser aufrufen dürfen, durch Kommas getrennt; leer: keine |
 
@@ -207,9 +243,9 @@ curl --silent --head --header "Authorization: Bearer $token" \
 ### Image bauen und starten
 
 ```bash
-docker build --tag placefinder:0.5.0 .       # Image bauen (erster Build einige Minuten)
-docker history placefinder:0.5.0             # Schichten mit Größe
-docker run --rm --publish 8000:8000 placefinder:0.5.0
+docker build --tag placefinder:0.6.0 .       # Image bauen (erster Build einige Minuten)
+docker history placefinder:0.6.0             # Schichten mit Größe
+docker run --rm --publish 8000:8000 placefinder:0.6.0
 curl "http://localhost:8000/v1/places?q=Erfurt"  # in einem zweiten Terminal
 ```
 
@@ -221,7 +257,7 @@ Das `Dockerfile` hat drei Stufen:
 | `build` | installiert mit uv die Abhängigkeiten genau nach `uv.lock`, dann PlaceFinder selbst als Paket |
 | Runtime | übernimmt nur die virtuelle Umgebung und die Daten, entfernt pip, läuft als Benutzer `app` ohne root |
 
-Die Daten gehören damit zum Image (rund 8 MB). So startet der Container überall ohne Download, auch auf den Serverless-Container-Diensten in Termin 3; aktuelle Daten gibt es mit einem neuen Build. Eine andere Datei wählt `--build-arg GEONAMES_FILE=cities5000`. `.dockerignore` hält `.git`, `.venv`, `data/`, `tests/`, ab `t03` auch `deploy/` und ab `t05` `frontend/` aus dem Build-Kontext heraus.
+Die Daten gehören damit zum Image (rund 8 MB). So startet der Container überall ohne Download, auch auf den Serverless-Container-Diensten in Termin 3; aktuelle Daten gibt es mit einem neuen Build. Ab `t06` liest der Container die Orte stattdessen aus der Datenbank, wenn `DATABASE_URL` gesetzt ist; die Datei im Image bleibt dann ungenutzt. Eine andere Datei wählt `--build-arg GEONAMES_FILE=cities5000`. `.dockerignore` hält `.git`, `.venv`, `data/`, `tests/`, ab `t03` auch `deploy/` und ab `t05` `frontend/` aus dem Build-Kontext heraus.
 
 Ändert sich nur der Code unter `src/`, baut Docker nur die letzten Schichten neu; ändert sich `uv.lock`, auch die Abhängigkeiten.
 
@@ -239,12 +275,12 @@ RUN uv sync --locked --no-dev
 CMD [".venv/bin/uvicorn", "placefinder.main:app", "--host", "0.0.0.0"]
 EOF
 docker images placefinder                                       # Größen vergleichen
-trivy image --severity HIGH,CRITICAL placefinder:0.5.0          # Schwachstellen
+trivy image --severity HIGH,CRITICAL placefinder:0.6.0          # Schwachstellen
 trivy image --severity HIGH,CRITICAL placefinder:single
 ```
 
 Fehlt `trivy` im Dev Container, geht es auch mit dem Image von Trivy:
-`docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.5.0`
+`docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.6.0`
 (feste Version: Einige Trivy-Images vom März 2026 waren manipuliert, deshalb nie ohne Tag)
 
 ### Trivy-Bericht lesen
@@ -262,7 +298,7 @@ Bei PlaceFinder (Stand `t02`) sind alle Python-Pakete der virtuellen Umgebung oh
 Die Python-Funde des Base-Images (`msgpack`, `urllib3`, `setuptools`) stammen aus pip, das diese Pakete in sich mitbringt. Im laufenden Container wird pip nicht gebraucht; die Runtime-Stufe entfernt es deshalb. Prüfen lässt sich die Herkunft eines Funds über den Pfad im JSON-Bericht:
 
 ```bash
-trivy image --format json placefinder:0.5.0 \
+trivy image --format json placefinder:0.6.0 \
   | jq --raw-output '.Results[] | .Vulnerabilities[]? | "\(.PkgName) \(.InstalledVersion) \(.PkgPath // "-")"'
 ```
 
@@ -276,15 +312,15 @@ Optional in Termin 2, nötig ab Termin 3 (die Container-Dienste laden das Image 
 gh auth login                                 # einmalig, falls noch nicht angemeldet
 gh auth refresh --scopes write:packages       # Recht zum Hochladen von Paketen
 gh auth token | docker login ghcr.io --username <github-user> --password-stdin
-docker tag placefinder:0.5.0 ghcr.io/<github-user>/placefinder:t05
-docker push ghcr.io/<github-user>/placefinder:t05
+docker tag placefinder:0.6.0 ghcr.io/<github-user>/placefinder:t06
+docker push ghcr.io/<github-user>/placefinder:t06
 ```
 
 Ein neues Paket ist zunächst privat. Für Termin 3 auf GitHub unter *Packages* → *placefinder* → *Package settings* → *Change visibility* auf **Public** stellen.
 
 ### Compose: zwei Dienste
 
-`compose.yaml` startet zwei Dienste: PlaceFinder (`api`) und `web`, einen winzigen Webserver aus dem offiziellen Image `busybox` (rund 2 MB).
+`compose.yaml` startet zwei Dienste: PlaceFinder (`api`) und `web`, einen winzigen Webserver aus dem offiziellen Image `busybox` (rund 2 MB). Ab `t06` kommt als dritter Dienst die Datenbank `db` dazu (Abschnitt [Datenbank](#datenbank)).
 
 > **Warum ein zweiter Dienst, der nichts mit PlaceFinder zu tun hat?**
 > Mit nur einem Dienst wäre `compose.yaml` ein längerer `docker run`-Befehl. Erst mit zwei Diensten zeigt sich, was Compose leistet:
@@ -295,7 +331,7 @@ Ein neues Paket ist zunächst privat. Für Termin 3 auf GitHub unter *Packages* 
 cd /workspaces/placefinder                    # compose.yaml liegt hier
 docker ps                                     # läuft noch ein Container auf Port 8000? stoppen
 docker compose up --detach                    # bauen (falls nötig) und starten
-docker compose ps                             # web: healthy, api: running
+docker compose ps                             # web: healthy, api: running (ab t06 auch db: healthy)
 curl http://localhost:8080/                   # Startseite von web, liegt im Volume
 docker compose exec api python -c "import urllib.request; print(urllib.request.urlopen('http://web:8080/').read().decode())"
 docker compose exec web sh -c 'echo "Changed" > /www/index.html'
@@ -306,7 +342,7 @@ docker compose down --volumes                 # zusätzlich das Volume löschen
 ```
 
 - **Netz:** Der Aufruf aus `api` erreicht `web` über den Dienstnamen als Hostnamen (`http://web:8080/`); Port 8080 auf dem Rechner braucht er dafür nicht.
-- **Reihenfolge:** `api` startet erst, wenn `web` den Healthcheck besteht (`wget` auf die Startseite).
+- **Reihenfolge:** `api` startet erst, wenn `web` den Healthcheck besteht (`wget` auf die Startseite), ab `t06` auch `db` (`pg_isready`).
 - **Volume:** `web` legt die Startseite beim ersten Start im Volume `www` an. Änderungen überstehen `docker compose down`; erst `down --volumes` löscht sie.
 
 Häufige Fehler:
@@ -343,13 +379,13 @@ curl "http://localhost:8000/v1/places?q=Erfurt"
 ### Neue Version ausrollen
 
 ```bash
-uv version 0.5.1 --no-sync                          # Version in pyproject.toml und uv.lock
-../cloud-labs-<anbieter>/t03-container/build-image.sh   # baut placefinder:0.5.1, lädt es in den Cluster
-kubectl set image deployment/placefinder api=placefinder:0.5.1
+uv version 0.6.1 --no-sync                          # Version in pyproject.toml und uv.lock
+../cloud-labs-<anbieter>/t03-container/build-image.sh   # baut placefinder:0.6.1, lädt es in den Cluster
+kubectl set image deployment/placefinder api=placefinder:0.6.1
 kubectl rollout status deployment/placefinder
-curl http://localhost:8000/                         # "version": "0.5.1"
-kubectl rollout undo deployment/placefinder         # zurück zu 0.5.0
-git restore pyproject.toml uv.lock                  # Version im Repository wieder 0.5.0
+curl http://localhost:8000/                         # "version": "0.6.1"
+kubectl rollout undo deployment/placefinder         # zurück zu 0.6.0
+git restore pyproject.toml uv.lock                  # Version im Repository wieder 0.6.0
 ```
 
 ### Konfiguration ändern
@@ -401,7 +437,7 @@ uv run ruff format      # Formatierung
 ```
 start.sh                    # starts the server locally (WSL or dev container)
 Dockerfile, .dockerignore   # container image with the GeoNames data (from t02)
-compose.yaml                # PlaceFinder and a small practice service (from t02)
+compose.yaml                # PlaceFinder, a small practice service (from t02), PostGIS (from t06)
 deploy/k8s/                 # Kubernetes manifests (from t03)
 deploy/hpa.yaml             # Horizontal Pod Autoscaler (from t03)
 deploy/helm/                # Helm chart and values per environment (from t03)
@@ -409,7 +445,9 @@ src/placefinder/main.py     # FastAPI app: loading the data at startup, CORS, v0
 src/placefinder/api.py      # REST API v1: GeoJSON, filters, cursor pagination, ETags (from t05)
 src/placefinder/problems.py # errors as problem details, RFC 9457 (from t05)
 src/placefinder/geo.py      # bounding boxes and distances (from t05)
-src/placefinder/places.py   # Place, GeoNames parser, in-memory repository with name index
+src/placefinder/repository.py # Place, search query and the interface of a place store (from t06)
+src/placefinder/places.py   # GeoNames parser, in-memory repository with name index
+src/placefinder/db.py       # repository in PostgreSQL with PostGIS (from t06)
 frontend/index.html         # map with MapLibre GL JS (from t05)
 data/download.sh            # downloads GeoNames dumps; data files are not committed
 tests/                      # pytest tests with a small sample of GeoNames lines
@@ -425,8 +463,9 @@ Code, Kommentare und Commit-Messages sind auf Englisch.
 | `t02` | v0 als Container-Image (`Dockerfile` mit den GeoNames-Daten), `compose.yaml` mit einem Übungsdienst |
 | `t03` | Kubernetes-Manifeste, Autoscaler und Helm-Chart unter `deploy/`; Log-Level über `LOG_LEVEL` |
 | `t05` | v1: REST-API unter `/v1` mit GeoJSON, Filtern, Cursor-Paginierung, ETags und Problem Details; Karte unter `frontend/`; v0 veraltet (Version 0.5.0) |
+| `t06` | Orte aus PostgreSQL mit PostGIS, wenn `DATABASE_URL` gesetzt ist; Dienst `db` in `compose.yaml` (Version 0.6.0) |
 
-Termin 4 (Netzwerke) ändert PlaceFinder nicht und hat keinen eigenen Tag. Die weiteren Stände folgen als Tags `t06`, `t07` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
+Termin 4 (Netzwerke) ändert PlaceFinder nicht und hat keinen eigenen Tag. Die weiteren Stände folgen als Tags `t07`, `t08` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
 
 ## Daten und Lizenz
 

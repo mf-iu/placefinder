@@ -1,17 +1,21 @@
-# PlaceFinder and a second service to practise Compose.
+# PlaceFinder, its database and a second service to practise Compose.
 # web is a tiny web server (BusyBox httpd, about 2 MB) that has nothing to
 # do with PlaceFinder. It shows what Compose adds to docker run: a shared
 # network with service names, a start order with health check and a named
-# volume. PlaceFinder gets its database (PostGIS) in session 6.
-# Start: docker compose up --detach   Stop: docker compose down (--volumes also deletes the volume)
+# volume. db is PostgreSQL with PostGIS (from session 6); the lab script
+# t06-datenbank/load-cities.sh loads the places into it.
+# Start: docker compose up --detach   Stop: docker compose down (--volumes also deletes the volumes)
 services:
   api:
     build: .
-    image: placefinder:0.5.0
+    image: placefinder:0.6.0
     ports: ["8000:8000"]
+    # with the database instead of the places in memory, after load-cities.sh:
+    # environment: {DATABASE_URL: "postgresql://pf:pf@db:5432/pf"}
     depends_on:
-      # start api only after web passes its health check
+      # start api only after web and db pass their health checks
       web: {condition: service_healthy}
+      db: {condition: service_healthy}
   web:
     image: busybox:1.37
     # create a start page in the volume on the first start, then serve /www
@@ -24,6 +28,20 @@ services:
       # httpd answers 404 without index.html, so this also checks the page
       test: wget --quiet --spider http://127.0.0.1:8080/
       interval: 5s
+  db:
+    image: postgis/postgis:18-3.6        # PostgreSQL 18 with PostGIS 3.6 (amd64 only)
+    environment:
+      POSTGRES_USER: pf
+      POSTGRES_PASSWORD: pf              # plain text for local development only
+      POSTGRES_DB: pf
+    ports: ["127.0.0.1:5432:5432"]       # reachable from this computer only
+    # from PostgreSQL 18 on, the volume belongs at /var/lib/postgresql
+    volumes: [pgdata:/var/lib/postgresql]
+    healthcheck:
+      # --host 127.0.0.1: check via TCP, the init server only listens on the socket
+      test: pg_isready --host 127.0.0.1 --username pf
+      interval: 5s
 
 volumes:
   www:
+  pgdata:

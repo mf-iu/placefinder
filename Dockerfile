@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # PlaceFinder image: GeoNames data, virtual environment, unprivileged runtime.
-# Build: docker build --tag placefinder:0.5.0 .
-# Run:   docker run --rm --publish 8000:8000 placefinder:0.5.0
+# Build: docker build --tag placefinder:0.6.0 .
+# Run:   docker run --rm --publish 8000:8000 placefinder:0.6.0
 
 # GeoNames dump that is baked into the image, e.g. cities5000 or DE
 ARG GEONAMES_FILE=cities15000

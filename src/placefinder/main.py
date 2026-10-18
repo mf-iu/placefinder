@@ -1,13 +1,18 @@
-"""PlaceFinder API: search places of a GeoNames dump in memory.
+"""PlaceFinder API: search places of GeoNames, in memory or in PostGIS.
 
 Version 1 under /v1 (from session 5): GeoJSON, filters, cursor pagination,
 ETags and errors as problem details. The unversioned endpoints of stage v0
 (/places) remain for a while and are marked as deprecated.
 
+With DATABASE_URL set, the places come from PostgreSQL with PostGIS (from
+session 6, db.py); otherwise PlaceFinder loads the GeoNames file DATA_FILE
+into memory at startup (places.py).
+
 Start for development:  uv run fastapi dev src/placefinder/main.py
 Start for production:   uvicorn placefinder.main:app --host 0.0.0.0 --port 8000
-Settings: DATA_FILE (GeoNames text file), LOG_LEVEL (default info),
-CORS_ORIGINS (origins of web pages that may call the API)
+Settings: DATABASE_URL (PostgreSQL connection string), DATA_FILE (GeoNames text
+file), LOG_LEVEL (default info), CORS_ORIGINS (origins of web pages that may
+call the API)
 """
 
 import logging
@@ -19,13 +24,17 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, Query, Response
+from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from psycopg import OperationalError
 
-from placefinder.api import create_router
-from placefinder.places import Place, PlaceRepository
-from placefinder.problems import Problem, add_problem_handlers, documented
+from placefinder.api import create_router, repository
+from placefinder.db import PostgisRepository, describe
+from placefinder.places import PlaceRepository
+from placefinder.problems import Problem, add_problem_handlers, documented, problem_response
+from placefinder.repository import Place, Repository, SearchQuery
 
 # default data file, relative to the working directory; override with DATA_FILE
 DEFAULT_DATA_FILE = "data/cities15000.txt"
@@ -43,18 +52,32 @@ V0_HEADERS = {
 logger = logging.getLogger("uvicorn.error")
 # level from the environment, e.g. a Kubernetes ConfigMap: debug, info, warning, error
 logger.setLevel(os.environ.get("LOG_LEVEL", "info").upper())
-repo = PlaceRepository()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Load the places once at startup, before the first request."""
+    """Choose the place store once at startup, before the first request:
+    PostGIS with DATABASE_URL, otherwise the GeoNames file in memory."""
+    if url := os.environ.get("DATABASE_URL"):
+        db = PostgisRepository(url)
+        db.open()  # fails early if the database or the table places is missing
+        logger.info("Using PostGIS at %s with about %d places", describe(url), db.count())
+        app.state.repo = db
+        try:
+            yield
+        finally:
+            db.close()
+        return
     path = Path(os.environ.get("DATA_FILE", DEFAULT_DATA_FILE))
     if not path.is_file():
         raise RuntimeError(f"Data file {path} not found. Run data/download.sh or set DATA_FILE.")
     start = time.perf_counter()
-    repo.load(path)
-    logger.info("Loaded %d places from %s in %.1f s", len(repo), path, time.perf_counter() - start)
+    memory = PlaceRepository()
+    memory.load(path)
+    logger.info(
+        "Loaded %d places from %s in %.1f s", len(memory), path, time.perf_counter() - start
+    )
+    app.state.repo = memory
     yield
 
 
@@ -65,7 +88,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 add_problem_handlers(app)
-app.include_router(create_router(repo))
+
+
+# also PoolTimeout: no free connection in the pool within 30 seconds
+@app.exception_handler(OperationalError)
+async def database_unavailable(request: Request, exc: Exception) -> JSONResponse:
+    """The database does not answer: 503 with a hint when to try again."""
+    logger.error("Database unavailable: %s", exc)
+    return problem_response(
+        request,
+        503,
+        "database-unavailable",
+        "Database unavailable",
+        "The database does not answer at the moment",
+        headers={"Retry-After": "30"},
+    )
+
+
+app.include_router(create_router())
 # CORS: web pages of these origins may read the responses in the browser
 app.add_middleware(
     CORSMiddleware,
@@ -89,14 +129,15 @@ def about() -> dict[str, str]:
 
 
 @app.get("/health")
-def health() -> dict[str, str | int]:
-    """Liveness check; also reports the number of loaded places."""
-    return {"status": "ok", "places": len(repo)}
+def health(repo: Annotated[Repository, Depends(repository)]) -> dict[str, str | int]:
+    """Health check; also reports the number of places (estimated with PostGIS)."""
+    return {"status": "ok", "places": repo.count()}
 
 
 @app.get("/places", deprecated=True, tags=["v0"], responses=documented(422))
 def search_places(
     response: Response,
+    repo: Annotated[Repository, Depends(repository)],
     q: Annotated[
         str,
         Query(min_length=1, max_length=100, description="Name or beginning of a name, e.g. Erfurt"),
@@ -109,7 +150,8 @@ def search_places(
     Exact matches come first, then larger places.
     """
     response.headers.update(V0_HEADERS)
-    places = repo.search(q, limit)
+    hits = repo.find(SearchQuery(sort="relevance", limit=limit, q=q))
+    places = [hit.place for hit in hits[:limit]]
     logger.debug("Search %r: %d of at most %d places", q, len(places), limit)
     return places
 
@@ -118,6 +160,7 @@ def search_places(
 def get_place(
     place_id: Annotated[int, PathParam(description="GeoNames id", examples=[2929670])],
     response: Response,
+    repo: Annotated[Repository, Depends(repository)],
 ) -> Place:
     """Version 0, deprecated: use GET /v1/places/{place_id}."""
     place = repo.get(place_id)

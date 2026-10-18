@@ -7,8 +7,6 @@ import binascii
 import hashlib
 import json
 import logging
-from bisect import bisect_right
-from collections.abc import Callable
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
 
@@ -16,9 +14,9 @@ from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from placefinder.geo import BBox, around, distance_m
-from placefinder.places import Place, PlaceRepository, normalize
+from placefinder.geo import BBox
 from placefinder.problems import Problem, documented
+from placefinder.repository import Place, Repository, SearchQuery, Sort
 
 MEDIA_TYPE = "application/geo+json"
 logger = logging.getLogger("uvicorn.error")
@@ -130,9 +128,6 @@ def parse_bbox(
     return box
 
 
-Sort = Literal["relevance", "-population", "name", "distance"]
-
-
 def encode_cursor(sort: str, key: tuple) -> str:
     """Opaque cursor: the sort order and the sort key of the last feature."""
     raw = json.dumps([sort, list(key)], separators=(",", ":")).encode()
@@ -176,7 +171,12 @@ def decode_cursor(cursor: str, sort: str) -> tuple:
 # ---- endpoints ----
 
 
-def create_router(repo: PlaceRepository) -> APIRouter:
+def repository(request: Request) -> Repository:
+    """The place store chosen at startup (main.py): in memory or PostGIS."""
+    return request.app.state.repo
+
+
+def create_router() -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["v1"])
 
     @router.get(
@@ -187,6 +187,7 @@ def create_router(repo: PlaceRepository) -> APIRouter:
     )
     def search_places(
         request: Request,
+        repo: Annotated[Repository, Depends(repository)],
         q: Annotated[
             str | None,
             Query(min_length=1, max_length=100, description="Name or beginning of a name"),
@@ -230,57 +231,32 @@ def create_router(repo: PlaceRepository) -> APIRouter:
                 {"parameter": "sort"},
             )
 
-        # candidates: the places whose name starts with q, or all places
-        ranks: dict[int, int] = {}
-        if q:
-            ranks = repo.matches(q)
-            places = [place for i in ranks if (place := repo.get(i)) is not None]
-        else:
-            places = list(repo.all())
-        if country:
-            places = [p for p in places if p.country_code == country.upper()]
-        if bbox:
-            places = [p for p in places if bbox.contains(p.longitude, p.latitude)]
-        distances: dict[int, float] = {}
-        if near:
-            box = around(lon, lat, radius)
-            for p in places:
-                if box.contains(p.longitude, p.latitude):
-                    d = distance_m(lon, lat, p.longitude, p.latitude)
-                    if d <= radius:
-                        distances[p.id] = d
-            places = [p for p in places if p.id in distances]
-
-        # sort key: unique because the id comes last; equal populations in
-        # descending order of the id, like ORDER BY population DESC, id DESC
-        keys: dict[str, Callable[[Place], tuple]] = {
-            "relevance": lambda p: (ranks[p.id], -p.population, -p.id),
-            "-population": lambda p: (-p.population, -p.id),
-            "name": lambda p: (normalize(p.name), p.id),
-            "distance": lambda p: (round(distances[p.id], 1), p.id),
-        }
-        key = keys[sort]
-        places.sort(key=key)
-        start = 0
-        if cursor is not None:
-            after = decode_cursor(cursor, sort)
-            start = bisect_right([key(p) for p in places], after)
-        page = places[start : start + limit]
+        query = SearchQuery(
+            sort=sort,
+            limit=limit,
+            q=q,
+            near=(lon, lat, radius) if lon is not None and lat is not None else None,
+            bbox=bbox,
+            country=country.upper() if country else None,
+            after=decode_cursor(cursor, sort) if cursor is not None else None,
+        )
+        hits = repo.find(query)
+        page = hits[:limit]
 
         # links with the same parameters; the cursor marks the position
         self_href = request.url.path + (f"?{request.url.query}" if request.url.query else "")
         links = [{"rel": "self", "type": MEDIA_TYPE, "href": self_href}]
-        query = {k: v for k, v in request.query_params.items() if k != "cursor"}
+        params = {k: v for k, v in request.query_params.items() if k != "cursor"}
         headers = {"Cache-Control": SEARCH_CACHE}
-        if start + limit < len(places):
-            next_query = {**query, "cursor": encode_cursor(sort, key(page[-1]))}
+        if len(hits) > limit:
+            next_query = {**params, "cursor": encode_cursor(sort, page[-1].key)}
             next_href = f"{request.url.path}?{urlencode(next_query, safe=',')}"
             links.append({"rel": "next", "type": MEDIA_TYPE, "href": next_href})
             headers["Link"] = f'<{next_href}>; rel="next"'
-        logger.debug("Search %s: %d of %d places", request.url.query, len(page), len(places))
+        logger.debug("Search %s: %d places", request.url.query, len(page))
         body = {
             "type": "FeatureCollection",
-            "features": [feature(p, distances.get(p.id) if near else None) for p in page],
+            "features": [feature(hit.place, hit.distance) for hit in page],
             "links": links,
         }
         return GeoJSONResponse(body, headers=headers)
@@ -294,6 +270,7 @@ def create_router(repo: PlaceRepository) -> APIRouter:
     def get_place(
         place_id: Annotated[int, Path(description="GeoNames id", examples=[2929670])],
         request: Request,
+        repo: Annotated[Repository, Depends(repository)],
     ) -> Response:
         """One place by its GeoNames id, with ETag for conditional requests."""
         place = repo.get(place_id)

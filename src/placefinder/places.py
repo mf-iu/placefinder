@@ -6,26 +6,14 @@ https://download.geonames.org/export/dump/readme.txt
 """
 
 import sys
-from bisect import bisect_left
-from collections.abc import Iterable
-from dataclasses import dataclass
+from bisect import bisect_left, bisect_right
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
+from placefinder.geo import around, distance_m
+from placefinder.repository import Hit, Place, SearchQuery
 
-@dataclass(frozen=True, slots=True)
-class Place:
-    """A place: GeoNames id, name, WGS 84 coordinates in degrees, ISO country
-    code, population, GeoNames feature code (e.g. PPLC for a capital) and
-    time zone."""
-
-    id: int
-    name: str
-    latitude: float
-    longitude: float
-    country_code: str
-    population: int
-    feature_code: str
-    timezone: str
+__all__ = ["Place", "PlaceRepository", "normalize", "parse_line"]
 
 
 def parse_line(line: str) -> tuple[Place, set[str]]:
@@ -64,6 +52,9 @@ class PlaceRepository:
         self._ids: list[int] = []
 
     def __len__(self) -> int:
+        return len(self._places)
+
+    def count(self) -> int:
         return len(self._places)
 
     def load(self, path: str | Path) -> None:
@@ -111,7 +102,47 @@ class PlaceRepository:
 
         Exact name matches come first, then by population (largest first).
         """
-        ranks = self.matches(q)
-        found = [self._places[place_id] for place_id in ranks]
-        found.sort(key=lambda p: (ranks[p.id], -p.population, p.id))
-        return found[:limit]
+        hits = self.find(SearchQuery(sort="relevance", limit=limit, q=q))
+        return [hit.place for hit in hits[:limit]]
+
+    def find(self, query: SearchQuery) -> list[Hit]:
+        """Search with filters and keyset pagination, see Repository.find."""
+        # candidates: the places whose name starts with q, or all places
+        ranks: dict[int, int] = {}
+        if query.q is not None:
+            ranks = self.matches(query.q)
+            places = [self._places[place_id] for place_id in ranks]
+        else:
+            places = list(self._places.values())
+        if query.country:
+            places = [p for p in places if p.country_code == query.country]
+        if query.bbox:
+            places = [p for p in places if query.bbox.contains(p.longitude, p.latitude)]
+        distances: dict[int, float] = {}
+        if query.near:
+            lon, lat, radius = query.near
+            box = around(lon, lat, radius)  # cheap filter before the exact distance
+            for p in places:
+                if box.contains(p.longitude, p.latitude):
+                    d = distance_m(lon, lat, p.longitude, p.latitude)
+                    if d <= radius:
+                        distances[p.id] = d
+            places = [p for p in places if p.id in distances]
+
+        # sort key: unique because the id comes last; equal populations in
+        # descending order of the id, like ORDER BY population DESC, id DESC
+        keys: dict[str, Callable[[Place], tuple]] = {
+            "relevance": lambda p: (ranks[p.id], -p.population, -p.id),
+            "-population": lambda p: (-p.population, -p.id),
+            "name": lambda p: (normalize(p.name), p.id),
+            "distance": lambda p: (round(distances[p.id], 1), p.id),
+        }
+        key = keys[query.sort]
+        hits = sorted(
+            (Hit(p, distances.get(p.id) if query.near else None, key(p)) for p in places),
+            key=lambda hit: hit.key,
+        )
+        if query.after is not None:
+            # keyset pagination: continue after the last key of the previous page
+            hits = hits[bisect_right([hit.key for hit in hits], query.after) :]
+        return hits[: query.limit + 1]

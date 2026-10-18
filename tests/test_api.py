@@ -1,6 +1,8 @@
 import logging
+import os
 
 import pytest
+from conftest import schema_with_places
 from fastapi.testclient import TestClient
 
 from placefinder.main import app
@@ -95,8 +97,31 @@ def test_v0_is_marked_as_deprecated(client: TestClient) -> None:
 
 
 def test_startup_fails_without_data_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("DATA_FILE", str(tmp_path / "missing.txt"))
     with pytest.raises(RuntimeError, match="data/download.sh"), TestClient(app):
+        pass
+
+
+def test_startup_fails_without_table(monkeypatch) -> None:
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("PostGIS tests need TEST_DATABASE_URL")
+    for conninfo in schema_with_places(url, with_table=False):
+        monkeypatch.setenv("DATABASE_URL", conninfo)
+        with pytest.raises(RuntimeError, match="load-cities.sh"), TestClient(app):
+            pass
+
+
+def test_startup_fails_at_once_without_database(monkeypatch) -> None:
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("PostGIS tests need TEST_DATABASE_URL")
+    from psycopg import OperationalError
+    from psycopg.conninfo import make_conninfo
+
+    monkeypatch.setenv("DATABASE_URL", make_conninfo(url, dbname="pf_no_such_database"))
+    with pytest.raises(OperationalError, match="does not exist"), TestClient(app):
         pass
 
 
@@ -104,3 +129,20 @@ def test_search_logs_at_debug_level(client: TestClient, caplog: pytest.LogCaptur
     caplog.set_level(logging.DEBUG, logger="uvicorn.error")
     client.get("/places", params={"q": "Erfurt"})
     assert "Search 'Erfurt': 1 of at most 10 places" in caplog.text
+
+
+def test_unavailable_database_returns_503(client: TestClient, monkeypatch) -> None:
+    from psycopg import OperationalError
+
+    def fail(*args, **kwargs):
+        raise OperationalError("connection lost")
+
+    monkeypatch.setattr(client.app.state.repo, "find", fail)
+    response = client.get("/v1/places", params={"q": "Erfurt"})
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "30"
+    assert response.json()["type"].endswith("/database-unavailable")
+
+
+def test_search_with_nul_byte_finds_nothing(client: TestClient) -> None:
+    assert client.get("/v1/places", params={"q": "Er\x00furt"}).json()["features"] == []
