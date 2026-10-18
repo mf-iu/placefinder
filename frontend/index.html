@@ -1,0 +1,137 @@
+<!doctype html>
+<!--
+  Map of PlaceFinder: loads the places in the visible part of the map from
+  GET /v1/places?bbox=... and draws them as circles (MapLibre GL JS 6).
+
+  Start (dev container, second terminal):
+    python3 -m http.server 5173 --directory frontend
+  then open http://localhost:5173. The API runs on port 8000 and allows
+  this origin via CORS (CORS_ORIGINS). Another API: ?api=https://...
+-->
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PlaceFinder</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.14.0/dist/maplibre-gl.css">
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    body { font-family: system-ui, sans-serif; }
+    #status {
+      position: absolute; top: 10px; left: 10px; z-index: 1;
+      background: rgb(255 255 255 / 0.9); padding: 6px 10px; border-radius: 4px;
+      font-size: 14px; max-width: 60%;
+    }
+    #status.error { color: #b00020; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="status">Lade …</div>
+  <script type="module">
+    // version 6 is an ES module only; pinned version, as everything in the course
+    import * as maplibregl from "https://unpkg.com/maplibre-gl@6.14.0/dist/maplibre-gl.mjs";
+
+    const api = new URLSearchParams(location.search).get("api") ?? "http://localhost:8000";
+    const status = document.getElementById("status");
+
+    const map = new maplibregl.Map({
+      container: "map",
+      style: "https://tiles.openfreemap.org/styles/liberty",  // no key needed
+      center: [11.03, 50.98],  // Erfurt: lon, lat
+      zoom: 7,
+      customAttribution: "Orte: GeoNames (CC BY 4.0)",
+    });
+    map.addControl(new maplibregl.NavigationControl());
+
+    let pending;  // request still running, cancelled by the next one
+
+    async function loadPlaces() {
+      const b = map.getBounds();
+      // the API accepts longitudes from -180 to 180 only
+      const bbox = [
+        Math.max(-180, b.getWest()), Math.max(-90, b.getSouth()),
+        Math.min(180, b.getEast()), Math.min(90, b.getNorth()),
+      ].map((v) => v.toFixed(4)).join(",");
+      const url = `${api}/v1/places?bbox=${bbox}&sort=-population&limit=100`;
+      pending?.abort();
+      pending = new AbortController();
+      try {
+        const response = await fetch(url, { signal: pending.signal });
+        const body = await response.json();
+        if (!response.ok) {
+          // problem details (RFC 9457): detail for people, type for programs
+          throw new Error(`${response.status} ${body.title}: ${body.detail ?? ""}`);
+        }
+        map.getSource("places").setData(body);
+        const more = body.links.some((link) => link.rel === "next") ? " (die größten)" : "";
+        status.textContent = `${body.features.length} Orte im Ausschnitt${more}`;
+        status.className = "";
+      } catch (error) {
+        if (error.name === "AbortError") return;
+        status.textContent = `Fehler: ${error.message}`;
+        status.className = "error";
+      }
+    }
+
+    map.on("load", () => {
+      map.addSource("places", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "places",
+        type: "circle",
+        source: "places",
+        paint: {
+          // larger circles for larger places
+          "circle-radius": [
+            "interpolate", ["linear"], ["get", "population"],
+            15000, 4, 1000000, 14,
+          ],
+          "circle-color": "#00b4d8",
+          "circle-stroke-color": "#003049",
+          "circle-stroke-width": 1,
+          "circle-opacity": 0.8,
+        },
+      });
+      map.addLayer({
+        id: "names",
+        type: "symbol",
+        source: "places",
+        layout: {
+          "text-field": ["get", "name"],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 12,
+          "text-offset": [0, 1.2],
+          "text-anchor": "top",
+        },
+      });
+      loadPlaces();
+    });
+    map.on("moveend", loadPlaces);
+
+    map.on("click", "places", (event) => {
+      const place = event.features[0];
+      const p = place.properties;
+      // build the popup from text nodes, never from HTML: the data come from an
+      // API, and names could contain markup (OWASP API10)
+      const content = document.createElement("div");
+      const name = document.createElement("b");
+      name.textContent = p.name;
+      const link = document.createElement("a");
+      link.href = `${api}/v1/places/${encodeURIComponent(place.id)}`;
+      link.target = "_blank";
+      link.textContent = "GeoJSON";
+      content.append(
+        name, ` (${p.country_code})`, document.createElement("br"),
+        `${Number(p.population).toLocaleString("de-DE")} Einwohner`,
+        document.createElement("br"), link,
+      );
+      new maplibregl.Popup().setLngLat(place.geometry.coordinates).setDOMContent(content).addTo(map);
+    });
+    map.on("mouseenter", "places", () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "places", () => { map.getCanvas().style.cursor = ""; });
+  </script>
+</body>
+</html>

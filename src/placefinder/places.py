@@ -87,15 +87,16 @@ class PlaceRepository:
         """Return the place with this GeoNames id, or None."""
         return self._places.get(place_id)
 
-    def search(self, q: str, limit: int = 10) -> list[Place]:
-        """Find places whose name starts with q, ignoring case.
+    def all(self) -> Iterable[Place]:
+        """All places, in no particular order."""
+        return self._places.values()
 
-        Exact name matches come first, then by population (largest first).
-        """
+    def matches(self, q: str) -> dict[int, int]:
+        """Ids of the places whose name starts with q, ignoring case, each with a
+        rank: 0 if a name equals q, 1 if a name only starts with q."""
         prefix = normalize(q)
         if not prefix:
-            return []
-        # rank per place id: 0 = a name equals q, 1 = a name starts with q
+            return {}
         ranks: dict[int, int] = {}
         # binary search for the first key >= prefix; all matching keys follow
         # it, and keys equal to the prefix come before longer ones
@@ -103,6 +104,14 @@ class PlaceRepository:
         while i < len(self._keys) and self._keys[i].startswith(prefix):
             ranks.setdefault(self._ids[i], 0 if self._keys[i] == prefix else 1)
             i += 1
+        return ranks
+
+    def search(self, q: str, limit: int = 10) -> list[Place]:
+        """Find places whose name starts with q, ignoring case.
+
+        Exact name matches come first, then by population (largest first).
+        """
+        ranks = self.matches(q)
         found = [self._places[place_id] for place_id in ranks]
         found.sort(key=lambda p: (ranks[p.id], -p.population, p.id))
         return found[:limit]

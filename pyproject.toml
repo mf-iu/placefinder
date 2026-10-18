@@ -1,6 +1,6 @@
 [project]
 name = "placefinder"
-version = "0.1.0"
+version = "0.5.0"
 description = "Place search API, example project of the cloud computing course"
 requires-python = ">=3.12"
 dependencies = [

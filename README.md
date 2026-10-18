@@ -2,7 +2,9 @@
 
 Beispielanwendung des Kurses „Cloud Computing“: ein Dienst zur Ortssuche auf Basis von GeoNames, später ergänzt um OpenStreetMap. PlaceFinder wächst von Termin zu Termin; jeder Stand ist als Git-Tag verfügbar.
 
-**Stand v0 (Tags `t01` bis `t03`):** eine FastAPI-Anwendung, die beim Start die GeoNames-Datei `cities15000` (alle Orte ab 15.000 Einwohnern, rund 34.000) in den Speicher lädt und nach Namen durchsucht. Ab `t02` gibt es dazu ein Container-Image und eine `compose.yaml`, die PlaceFinder zusammen mit einem kleinen Übungsdienst startet (Abschnitt [Container](#container)). Ab `t03` liegen unter `deploy/` Manifeste für Kubernetes und ein Helm-Chart (Abschnitt [Kubernetes](#kubernetes)). Eine Datenbank folgt in Termin 6.
+**Stand v0 (Tags `t01` bis `t03`):** eine FastAPI-Anwendung, die beim Start die GeoNames-Datei `cities15000` (alle Orte ab 15.000 Einwohnern, rund 34.000) in den Speicher lädt und nach Namen durchsucht. Ab `t02` gibt es dazu ein Container-Image und eine `compose.yaml`, die PlaceFinder zusammen mit einem kleinen Übungsdienst startet (Abschnitt [Container](#container)). Ab `t03` liegen unter `deploy/` Manifeste für Kubernetes und ein Helm-Chart (Abschnitt [Kubernetes](#kubernetes)).
+
+**Stand v1 (Tag `t05`, Version 0.5.0):** eine REST-API unter `/v1` mit GeoJSON, Suche nach Name, Umkreis, Bounding Box und Land, Cursor-Paginierung, Caching-Headern, ETags und Fehlern nach RFC 9457 (Abschnitt [REST-API v1](#rest-api-v1)), dazu eine Karte mit MapLibre GL JS (Abschnitt [Karte](#karte)). Die Endpunkte von v0 bleiben vorerst erreichbar, sind aber als veraltet markiert. Die Daten liegen weiter im Speicher; eine Datenbank folgt in Termin 6.
 
 ## Einrichtung
 
@@ -45,24 +47,101 @@ Voraussetzung ist der Dev Container eines Übungs-Repositorys (`cloud-labs-aws`,
 In einem zweiten Terminal:
 
 ```bash
-curl "http://localhost:8000/places?q=Erfurt"
+curl "http://localhost:8000/v1/places?q=Erfurt"
 ```
 
 ```json
-[{"id":2929670,"name":"Erfurt","latitude":50.97734,"longitude":11.03536,"country_code":"DE","population":218793,"feature_code":"PPLA","timezone":"Europe/Berlin"}]
+{"type":"FeatureCollection","features":[{"type":"Feature","id":2929670,"geometry":{"type":"Point","coordinates":[11.03536,50.97734]},"properties":{"name":"Erfurt","country_code":"DE","population":218793,"feature_code":"PPLA","timezone":"Europe/Berlin"},"links":[{"rel":"self","type":"application/geo+json","href":"/v1/places/2929670"}]}],"links":[{"rel":"self","type":"application/geo+json","href":"/v1/places?q=Erfurt"}]}
 ```
 
 Die Werte hängen vom Stand der GeoNames-Daten ab. VS Code leitet den Port aus dem Dev Container weiter; die interaktive API-Dokumentation steht unter http://localhost:8000/docs.
 
 | Methode und Pfad | Antwort |
 |---|---|
-| `GET /places?q=…&limit=…` | Orte, deren Name, ASCII-Name oder alternativer Name mit `q` beginnt, ohne Unterschied zwischen Groß- und Kleinschreibung. Genaue Treffer zuerst, dann nach Einwohnerzahl. `limit` 1–100, Standard 10. |
-| `GET /places/{id}` | ein Ort nach GeoNames-ID; 404, wenn es ihn nicht gibt |
+| `GET /v1/places` | Orte als GeoJSON-FeatureCollection, gefiltert und seitenweise (Abschnitt [REST-API v1](#rest-api-v1)) |
+| `GET /v1/places/{id}` | ein Ort als GeoJSON-Feature mit ETag; 404, wenn es ihn nicht gibt |
 | `GET /health` | Status und Zahl der geladenen Orte, z. B. für Health Checks |
 | `GET /` | Name, Version und Quellenangabe der Daten |
 | `GET /docs`, `GET /openapi.json` | von FastAPI erzeugte Dokumentation (OpenAPI) |
+| `GET /places?q=…&limit=…`, `GET /places/{id}` | Version 0, veraltet: Liste einfacher JSON-Objekte. Die Antworten tragen die Header `Deprecation` und `Sunset` (01.01.2027) und verweisen mit `Link` auf `/v1/places`. |
 
 Alternative Namen machen auch deutsche Namen auffindbar: GeoNames führt München als „Munich“, `q=München` findet es trotzdem.
+
+## REST-API v1
+
+Ab Tag `t05`. Musterlösung zu Termin 5; der Code steht in `src/placefinder/api.py` (Endpunkte, GeoJSON), `problems.py` (Fehlerformat) und `geo.py` (Bounding Box, Abstände).
+
+### Suche: `GET /v1/places`
+
+| Parameter | Bedeutung |
+|---|---|
+| `q` | Name oder Anfang eines Namens, auch alternative Namen |
+| `lon`, `lat`, `radius` | Umkreis um einen Punkt; `radius` in Metern, 1 bis 50.000, Standard 10.000. Die Antwort enthält dann `distance` in Metern. |
+| `bbox` | `minLon,minLat,maxLon,maxLat`, z. B. `10.9,50.9,11.2,51.1` – Länge vor Breite wie in GeoJSON |
+| `country` | Ländercode nach ISO 3166, z. B. `DE` |
+| `sort` | `relevance` (Standard mit `q`), `distance` (Standard mit `lon`/`lat`), `-population` (sonst Standard), `name` |
+| `limit` | 1 bis 100, Standard 20 |
+| `cursor` | Position aus dem Link `next` der vorigen Seite |
+
+Alle Filter lassen sich kombinieren. Gibt es weitere Treffer, enthält die Antwort einen Link `next` im Body und im Header `Link` (RFC 8288). Der Cursor ist undurchsichtig: Er enthält Sortierung und Sortierschlüssel des letzten Orts, Base64-kodiert. Der Link `next` wiederholt alle übrigen Parameter.
+
+```bash
+curl "http://localhost:8000/v1/places?lon=11.03&lat=50.98&radius=25000"           # Umkreis um Erfurt
+curl "http://localhost:8000/v1/places?bbox=10.9,50.9,11.2,51.1&sort=-population"   # Kartenausschnitt
+curl --include "http://localhost:8000/v1/places?country=DE&limit=2"                # Header Link: …; rel="next"
+```
+
+### Ein Ort: `GET /v1/places/{id}`
+
+Die Antwort trägt ein `ETag` (Hash des Inhalts) und `Cache-Control: public, max-age=3600`. Mit `If-None-Match` antwortet die API mit `304 Not Modified` ohne Inhalt, solange sich der Ort nicht geändert hat:
+
+```bash
+curl --include http://localhost:8000/v1/places/2929670                     # ETag kopieren
+curl --include --header 'If-None-Match: "<etag>"' http://localhost:8000/v1/places/2929670
+```
+
+Die Suche liefert `Cache-Control: public, max-age=60, stale-while-revalidate=300`.
+
+### Fehler nach RFC 9457
+
+Alle Fehler, auch unbekannte Pfade und ungültige Parameter, kommen als `application/problem+json`:
+
+```bash
+curl --include "http://localhost:8000/v1/places?bbox=11.0,50.9"
+```
+
+```json
+{"type":"https://placefinder.test/problems/invalid-bbox","title":"Invalid bounding box","status":422,"detail":"bbox needs 4 numbers, got 2","instance":"/v1/places","parameter":"bbox"}
+```
+
+| Fall | Status | `type` (unter `https://placefinder.test/problems/`) |
+|---|---|---|
+| Ort unbekannt | 404 | `place-not-found` |
+| `bbox` falsch aufgebaut oder außerhalb der Wertebereiche | 422 | `invalid-bbox` |
+| übrige ungültige Parameter, z. B. `limit=500`, `lon` ohne `lat` | 422 | `invalid-parameters` (mit Liste `errors`, wenn FastAPI prüft) |
+| Cursor ungültig oder zu einer anderen Sortierung | 422 | `invalid-cursor` |
+| unbekannter Pfad, falsche Methode | 404, 405 | `about:blank` |
+
+### Tests
+
+```bash
+uv run pytest                                  # Unit- und API-Tests, auch für v1
+uvx schemathesis run http://localhost:8000/openapi.json \
+  --exclude-checks positive_data_acceptance    # Vertragstest gegen den laufenden Server
+```
+
+Schemathesis erzeugt aus der OpenAPI-Beschreibung Hunderte von Anfragen und prüft Statuscodes, Medientypen und Schemas der Antworten. Die Prüfung `positive_data_acceptance` erwartet, dass jede Anfrage, die zum Schema passt, angenommen wird. Ein beliebiger `cursor` passt zum Schema, ist aber kein gültiger Cursor – die API lehnt ihn zu Recht mit 422 ab. Deshalb ist diese Prüfung ausgeschlossen. Mit `--checks all` laufen zusätzlich alle übrigen Prüfungen.
+
+## Karte
+
+Ab Tag `t05`. `frontend/index.html` zeigt die Orte im sichtbaren Ausschnitt auf einer Karte (MapLibre GL JS 6, Basiskarte von OpenFreeMap). Bei jeder Bewegung lädt die Seite `GET /v1/places?bbox=…&sort=-population&limit=100` neu.
+
+```bash
+uv run fastapi dev src/placefinder/main.py              # Terminal 1: API auf Port 8000
+python3 -m http.server 5173 --directory frontend        # Terminal 2: Karte auf Port 5173
+```
+
+Im Browser http://localhost:5173 öffnen. Karte und API haben verschiedene Herkünfte (Port 5173 und 8000); die API erlaubt die Karte über CORS (`CORS_ORIGINS`). Mit `?api=https://…` zeigt die Karte die Daten einer anderen Instanz, etwa des Dienstes beim eigenen Anbieter.
 
 ## Konfiguration
 
@@ -70,6 +149,7 @@ Alternative Namen machen auch deutsche Namen auffindbar: GeoNames führt Münche
 |---|---|---|
 | `DATA_FILE` | `data/cities15000.txt` (relativ zum Arbeitsverzeichnis) | GeoNames-Datei, die beim Start geladen wird |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warning` oder `error`; mit `debug` erscheint jede Suche im Log |
+| `CORS_ORIGINS` | `http://localhost:5173` | Herkünfte (Schema, Host, Port) von Webseiten, die die API im Browser aufrufen dürfen, durch Kommas getrennt; leer: keine |
 
 Fehlt die Datei, bricht der Start mit einer Meldung ab. `data/download.sh` lädt auch andere GeoNames-Dateien, z. B. `data/download.sh cities5000` (Orte ab 5.000 Einwohnern) oder `data/download.sh DE` (alle Einträge für Deutschland, auch Berge, Gewässer usw.); dann `DATA_FILE=data/DE.txt uv run fastapi dev src/placefinder/main.py` oder kurz `./start.sh --data DE`. Größere Dateien brauchen entsprechend mehr Speicher und Startzeit. Mit `cities15000` belegt PlaceFinder rund 130 MB Arbeitsspeicher und startet in etwa einer Sekunde.
 
@@ -127,10 +207,10 @@ curl --silent --head --header "Authorization: Bearer $token" \
 ### Image bauen und starten
 
 ```bash
-docker build --tag placefinder:0.1.0 .       # Image bauen (erster Build einige Minuten)
-docker history placefinder:0.1.0             # Schichten mit Größe
-docker run --rm --publish 8000:8000 placefinder:0.1.0
-curl "http://localhost:8000/places?q=Erfurt" # in einem zweiten Terminal
+docker build --tag placefinder:0.5.0 .       # Image bauen (erster Build einige Minuten)
+docker history placefinder:0.5.0             # Schichten mit Größe
+docker run --rm --publish 8000:8000 placefinder:0.5.0
+curl "http://localhost:8000/v1/places?q=Erfurt"  # in einem zweiten Terminal
 ```
 
 Das `Dockerfile` hat drei Stufen:
@@ -141,7 +221,7 @@ Das `Dockerfile` hat drei Stufen:
 | `build` | installiert mit uv die Abhängigkeiten genau nach `uv.lock`, dann PlaceFinder selbst als Paket |
 | Runtime | übernimmt nur die virtuelle Umgebung und die Daten, entfernt pip, läuft als Benutzer `app` ohne root |
 
-Die Daten gehören damit zum Image (rund 8 MB). So startet der Container überall ohne Download, auch auf den Serverless-Container-Diensten in Termin 3; aktuelle Daten gibt es mit einem neuen Build. Eine andere Datei wählt `--build-arg GEONAMES_FILE=cities5000`. `.dockerignore` hält `.git`, `.venv`, `data/`, `tests/` und ab `t03` auch `deploy/` aus dem Build-Kontext heraus.
+Die Daten gehören damit zum Image (rund 8 MB). So startet der Container überall ohne Download, auch auf den Serverless-Container-Diensten in Termin 3; aktuelle Daten gibt es mit einem neuen Build. Eine andere Datei wählt `--build-arg GEONAMES_FILE=cities5000`. `.dockerignore` hält `.git`, `.venv`, `data/`, `tests/`, ab `t03` auch `deploy/` und ab `t05` `frontend/` aus dem Build-Kontext heraus.
 
 Ändert sich nur der Code unter `src/`, baut Docker nur die letzten Schichten neu; ändert sich `uv.lock`, auch die Abhängigkeiten.
 
@@ -159,12 +239,12 @@ RUN uv sync --locked --no-dev
 CMD [".venv/bin/uvicorn", "placefinder.main:app", "--host", "0.0.0.0"]
 EOF
 docker images placefinder                                       # Größen vergleichen
-trivy image --severity HIGH,CRITICAL placefinder:0.1.0          # Schwachstellen
+trivy image --severity HIGH,CRITICAL placefinder:0.5.0          # Schwachstellen
 trivy image --severity HIGH,CRITICAL placefinder:single
 ```
 
 Fehlt `trivy` im Dev Container, geht es auch mit dem Image von Trivy:
-`docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.1.0`
+`docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.5.0`
 (feste Version: Einige Trivy-Images vom März 2026 waren manipuliert, deshalb nie ohne Tag)
 
 ### Trivy-Bericht lesen
@@ -182,7 +262,7 @@ Bei PlaceFinder (Stand `t02`) sind alle Python-Pakete der virtuellen Umgebung oh
 Die Python-Funde des Base-Images (`msgpack`, `urllib3`, `setuptools`) stammen aus pip, das diese Pakete in sich mitbringt. Im laufenden Container wird pip nicht gebraucht; die Runtime-Stufe entfernt es deshalb. Prüfen lässt sich die Herkunft eines Funds über den Pfad im JSON-Bericht:
 
 ```bash
-trivy image --format json placefinder:0.1.0 \
+trivy image --format json placefinder:0.5.0 \
   | jq --raw-output '.Results[] | .Vulnerabilities[]? | "\(.PkgName) \(.InstalledVersion) \(.PkgPath // "-")"'
 ```
 
@@ -196,8 +276,8 @@ Optional in Termin 2, nötig ab Termin 3 (die Container-Dienste laden das Image 
 gh auth login                                 # einmalig, falls noch nicht angemeldet
 gh auth refresh --scopes write:packages       # Recht zum Hochladen von Paketen
 gh auth token | docker login ghcr.io --username <github-user> --password-stdin
-docker tag placefinder:0.1.0 ghcr.io/<github-user>/placefinder:t02
-docker push ghcr.io/<github-user>/placefinder:t02
+docker tag placefinder:0.5.0 ghcr.io/<github-user>/placefinder:t05
+docker push ghcr.io/<github-user>/placefinder:t05
 ```
 
 Ein neues Paket ist zunächst privat. Für Termin 3 auf GitHub unter *Packages* → *placefinder* → *Package settings* → *Change visibility* auf **Public** stellen.
@@ -255,7 +335,7 @@ cd /workspaces/placefinder
 kubectl apply --filename deploy/k8s/
 kubectl get pods --output wide                 # drei Pods, verteilt auf die Nodes
 kubectl port-forward svc/placefinder 8000:80   # läuft weiter; zweites Terminal öffnen
-curl "http://localhost:8000/places?q=Erfurt"
+curl "http://localhost:8000/v1/places?q=Erfurt"
 ```
 
 `port-forward` verbindet mit genau einem Pod. Wird dieser Pod ersetzt (Update, Löschen), bricht die Verbindung ab; dann den Befehl erneut starten.
@@ -263,13 +343,13 @@ curl "http://localhost:8000/places?q=Erfurt"
 ### Neue Version ausrollen
 
 ```bash
-uv version 0.1.1 --no-sync                          # Version in pyproject.toml und uv.lock
-../cloud-labs-<anbieter>/t03-container/build-image.sh   # baut placefinder:0.1.1, lädt es in den Cluster
-kubectl set image deployment/placefinder api=placefinder:0.1.1
+uv version 0.5.1 --no-sync                          # Version in pyproject.toml und uv.lock
+../cloud-labs-<anbieter>/t03-container/build-image.sh   # baut placefinder:0.5.1, lädt es in den Cluster
+kubectl set image deployment/placefinder api=placefinder:0.5.1
 kubectl rollout status deployment/placefinder
-curl http://localhost:8000/                         # "version": "0.1.1"
-kubectl rollout undo deployment/placefinder         # zurück zu 0.1.0
-git restore pyproject.toml uv.lock                  # Version im Repository wieder 0.1.0
+curl http://localhost:8000/                         # "version": "0.5.1"
+kubectl rollout undo deployment/placefinder         # zurück zu 0.5.0
+git restore pyproject.toml uv.lock                  # Version im Repository wieder 0.5.0
 ```
 
 ### Konfiguration ändern
@@ -280,7 +360,7 @@ Die ConfigMap liefert `LOG_LEVEL` und `DATA_FILE` als Umgebungsvariablen. PlaceF
 # in deploy/k8s/placefinder.yaml: LOG_LEVEL: debug
 kubectl apply --filename deploy/k8s/
 kubectl rollout restart deployment/placefinder
-kubectl logs deployment/placefinder --follow       # nach einer Suche: "Search 'Erfurt': …"
+kubectl logs deployment/placefinder --follow       # nach einer Suche: "Search q=Erfurt: …"
 ```
 
 ### Helm
@@ -305,7 +385,7 @@ Die Annotation `checksum/config` im Deployment ändert sich mit der ConfigMap; d
 kubectl apply --filename deploy/hpa.yaml
 kubectl get hpa --watch                             # zweites Terminal
 kubectl run load --rm --stdin --tty --image=busybox:1.37 -- \
-  sh -c 'while true; do wget --quiet --output-document /dev/null "http://placefinder/places?q=B"; done'
+  sh -c 'while true; do wget --quiet --output-document /dev/null "http://placefinder/v1/places?q=B"; done'
 ```
 
 Mit Last steigt die Zahl der Replikate auf bis zu sechs; nach dem Ende der Last (Ctrl+C) sinkt sie nach etwa fünf Minuten wieder auf zwei. Achtung: Ein erneutes `kubectl apply --filename deploy/k8s/` setzt die Replikate zunächst auf drei zurück, danach regelt der HPA wieder. Entfernen: `kubectl delete --filename deploy/hpa.yaml`.
@@ -325,8 +405,12 @@ compose.yaml                # PlaceFinder and a small practice service (from t02
 deploy/k8s/                 # Kubernetes manifests (from t03)
 deploy/hpa.yaml             # Horizontal Pod Autoscaler (from t03)
 deploy/helm/                # Helm chart and values per environment (from t03)
-src/placefinder/main.py     # FastAPI app: endpoints, loading the data at startup
+src/placefinder/main.py     # FastAPI app: loading the data at startup, CORS, v0 endpoints
+src/placefinder/api.py      # REST API v1: GeoJSON, filters, cursor pagination, ETags (from t05)
+src/placefinder/problems.py # errors as problem details, RFC 9457 (from t05)
+src/placefinder/geo.py      # bounding boxes and distances (from t05)
 src/placefinder/places.py   # Place, GeoNames parser, in-memory repository with name index
+frontend/index.html         # map with MapLibre GL JS (from t05)
 data/download.sh            # downloads GeoNames dumps; data files are not committed
 tests/                      # pytest tests with a small sample of GeoNames lines
 ```
@@ -340,8 +424,9 @@ Code, Kommentare und Commit-Messages sind auf Englisch.
 | `t01` | v0: Ortssuche über `cities15000` im Speicher (`/places?q=…`, `/places/{id}`) |
 | `t02` | v0 als Container-Image (`Dockerfile` mit den GeoNames-Daten), `compose.yaml` mit einem Übungsdienst |
 | `t03` | Kubernetes-Manifeste, Autoscaler und Helm-Chart unter `deploy/`; Log-Level über `LOG_LEVEL` |
+| `t05` | v1: REST-API unter `/v1` mit GeoJSON, Filtern, Cursor-Paginierung, ETags und Problem Details; Karte unter `frontend/`; v0 veraltet (Version 0.5.0) |
 
-Die weiteren Stände folgen als Tags `t04`, `t05` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
+Termin 4 (Netzwerke) ändert PlaceFinder nicht und hat keinen eigenen Tag. Die weiteren Stände folgen als Tags `t06`, `t07` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
 
 ## Daten und Lizenz
 

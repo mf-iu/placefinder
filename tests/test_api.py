@@ -9,7 +9,7 @@ from placefinder.main import app
 def test_health_reports_loaded_places(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "places": 5}
+    assert response.json() == {"status": "ok", "places": 7}
 
 
 def test_about_contains_attribution(client: TestClient) -> None:
@@ -82,7 +82,16 @@ def test_get_place_by_id(client: TestClient) -> None:
 def test_get_unknown_place_returns_404(client: TestClient) -> None:
     response = client.get("/places/1")
     assert response.status_code == 404
-    assert response.json() == {"detail": "No place with id 1"}
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["detail"] == "No place with id 1"
+
+
+def test_v0_is_marked_as_deprecated(client: TestClient) -> None:
+    response = client.get("/places", params={"q": "Erfurt"})
+    assert response.headers["deprecation"] == "@1790812800"
+    assert response.headers["sunset"] == "Fri, 01 Jan 2027 00:00:00 GMT"
+    assert 'rel="successor-version"' in response.headers["link"]
+    assert client.get("/openapi.json").json()["paths"]["/places"]["get"]["deprecated"] is True
 
 
 def test_startup_fails_without_data_file(tmp_path, monkeypatch) -> None:

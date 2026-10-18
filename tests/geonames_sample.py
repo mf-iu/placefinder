@@ -9,6 +9,8 @@ def geonames_line(
     lon: float,
     feature_code: str,
     population: int,
+    country: str = "DE",
+    timezone: str = "Europe/Berlin",
 ) -> str:
     """Build one line with the 19 tab-separated columns of a GeoNames dump."""
     columns = [""] * 19
@@ -17,9 +19,9 @@ def geonames_line(
     columns[3] = alternates
     columns[4], columns[5] = str(lat), str(lon)
     columns[6], columns[7] = "P", feature_code  # feature class and code
-    columns[8] = "DE"  # country code
+    columns[8] = country  # ISO 3166 country code
     columns[14] = str(population)
-    columns[17] = "Europe/Berlin"  # time zone
+    columns[17] = timezone
     return "\t".join(columns) + "\n"
 
 
@@ -37,5 +39,9 @@ SAMPLE = [
         14.55062,
         "PPLA3",
         57873,
+    ),
+    geonames_line(2812482, "Weimar", "Veimar", 50.9803, 11.32903, "PPLA3", 65090),
+    geonames_line(
+        2761369, "Vienna", "Wien", 48.20849, 16.37208, "PPLC", 1691468, "AT", "Europe/Vienna"
     ),
 ]
