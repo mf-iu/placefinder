@@ -8,6 +8,8 @@ Beispielanwendung des Kurses „Cloud Computing“: ein Dienst zur Ortssuche auf
 
 **Stand mit Datenbank (Tag `t06`, Version 0.6.0):** Ist `DATABASE_URL` gesetzt, liest PlaceFinder die Orte aus PostgreSQL mit PostGIS statt aus der Datei im Speicher – dieselbe API, dieselben Antworten (Abschnitt [Datenbank](#datenbank)). `compose.yaml` enthält dafür den Dienst `db`. Ohne `DATABASE_URL` arbeitet PlaceFinder wie bisher mit der Datei.
 
+**Stand mit Cache und eigenen Kacheln (Tag `t07`, Version 0.7.0):** Ist `VALKEY_URL` gesetzt, hält PlaceFinder die Antworten der Suche einige Minuten in Valkey (Abschnitt [Cache](#cache)). Die Karte liest ihre Basiskarte auf Wunsch aus einer einzigen PMTiles-Datei im Object Storage (Abschnitt [Eigene Kacheln](#eigene-kacheln-pmtiles)). `compose.yaml` enthält dafür die Dienste `valkey` und `seaweedfs`.
+
 ## Einrichtung
 
 Voraussetzung ist der Dev Container eines Übungs-Repositorys (`cloud-labs-aws`, `cloud-labs-azure` oder `cloud-labs-gcp`, siehe dessen README). Ohne Dev Container genügt die Ubuntu-Shell in WSL: `start.sh` installiert [uv](https://docs.astral.sh/uv/) bei Bedarf, uv lädt ein passendes Python.
@@ -145,6 +147,22 @@ python3 -m http.server 5173 --directory frontend        # Terminal 2: Karte auf 
 
 Im Browser http://localhost:5173 öffnen. Karte und API haben verschiedene Herkünfte (Port 5173 und 8000); die API erlaubt die Karte über CORS (`CORS_ORIGINS`). Mit `?api=https://…` zeigt die Karte die Daten einer anderen Instanz, etwa des Dienstes beim eigenen Anbieter.
 
+### Eigene Kacheln (PMTiles)
+
+Ab Tag `t07`. Mit `?tiles=<URL>` zeichnet die Karte ihre Basiskarte aus einer einzigen [PMTiles](https://docs.protomaps.com/pmtiles/)-Datei statt aus den Kacheln von OpenFreeMap. Die Datei liegt im Object Storage; einen Kachelserver braucht es nicht. Die Bibliothek `pmtiles` liest zuerst Kopf und Verzeichnis der Datei und dann jede Kachel mit einem HTTP-Range-Request (`Range: bytes=…`, Antwort `206 Partial Content`). Der Stil kommt von Protomaps (`@protomaps/basemaps`, Variante `light`, Beschriftung auf Deutsch).
+
+```bash
+cd /workspaces/cloud-labs-<anbieter>/t07-objektspeicher
+./make-tiles.sh                                      # Ausschnitt um Erfurt aus dem Protomaps-Build, wenige MB
+uv run local-s3.py upload ../.state/data/erfurt.pmtiles tiles/erfurt.pmtiles   # in SeaweedFS
+uv run local-s3.py map tiles/erfurt.pmtiles          # gibt die Adresse der Karte mit ?tiles=… aus
+```
+
+- **URL:** meist eine Pre-Signed URL – der Bucket bleibt privat, die URL gilt eine begrenzte Zeit. Als Parameter muss sie URL-kodiert sein; `local-s3.py map` und die Skripte für die Anbieter erledigen das.
+- **CORS:** Der Bucket muss Anfragen der Herkunft `http://localhost:5173` mit dem Header `Range` erlauben und `ETag` sowie `Content-Range` freigeben.
+- **Ausschnitt:** Die Karte zoomt beim Start auf die Bounding Box aus dem Kopf der Datei.
+- **Daten:** © OpenStreetMap-Mitwirkende (ODbL), Kacheln und Stil von Protomaps; die Karte nennt beides unten rechts.
+
 ## Datenbank
 
 Ab Tag `t06`. Musterlösung zu Termin 6: `src/placefinder/db.py` liest die Orte aus der Tabelle `places` in PostgreSQL mit PostGIS. Die Tabelle legt `load-cities.sh` aus dem Übungs-Repository an (`t06-datenbank`): die Spalten der GeoNames-Datei, die Spalte `geom` vom Typ `geography` mit GiST-Index und Trigramm-Indizes für die Namen.
@@ -178,12 +196,43 @@ Dieselbe Variable mit der Verbindungszeichenkette aus `create-db.sh` verbindet P
 TEST_DATABASE_URL=postgresql://pf:pf@localhost:5432/pf uv run pytest
 ```
 
+## Cache
+
+Ab Tag `t07`. Musterlösung zu Termin 7: `src/placefinder/cache.py` hält die Antworten von `GET /v1/places` in Valkey, dem quelloffenen Nachfolger von Redis (BSD-Lizenz). Die Orte ändern sich selten, die Suchen wiederholen sich ständig – die Karte fragt dieselben Ausschnitte immer wieder.
+
+```bash
+cd /workspaces/placefinder
+docker compose up --detach valkey                      # Valkey lokal, Port 6379 nur auf diesem Rechner
+export VALKEY_URL=valkey://localhost:6379/0
+uv run fastapi dev src/placefinder/main.py             # meldet: Caching searches in Valkey at localhost:6379/0 for 300 s
+curl --include "http://localhost:8000/v1/places?q=Erfurt" | grep --ignore-case cache-status   # fwd=uri-miss; stored
+curl --include "http://localhost:8000/v1/places?q=Erfurt" | grep --ignore-case cache-status   # hit
+docker compose exec valkey valkey-cli --scan --pattern 'placefinder:*'   # die Schlüssel
+docker compose exec valkey valkey-cli ttl 'placefinder:v1:/v1/places?q=Erfurt'   # Sekunden bis zum Ablauf
+```
+
+- **Cache-aside:** zuerst im Cache nachsehen; bei einem Treffer antwortet PlaceFinder ohne Datenbank. Sonst fragt es das Repository und legt die Antwort mit einer Lebensdauer (TTL, `CACHE_TTL`, Standard 300 s) ab. Danach löscht Valkey sie selbst.
+- **Schlüssel:** Pfad und Query-String genau wie gesendet, z. B. `placefinder:v1:/v1/places?q=Erfurt`. `?a=1&b=2` und `?b=2&a=1` sind zwei Schlüssel; Fehlerantworten werden nicht gespeichert.
+- **`Cache-Status`** (RFC 9211): `PlaceFinder; hit` oder `PlaceFinder; fwd=uri-miss; stored`. Ohne `VALKEY_URL` fehlt der Header.
+- **Zwei Caches:** `Cache-Control: public, max-age=60` erlaubt Browsern und CDNs, die Antwort eine Minute zu behalten (Termin 5); Valkey hält sie fünf Minuten für alle Clients.
+- **Veraltete Antworten:** Nach einem neuen `load-cities.sh` liefert der Cache bis zum Ablauf der TTL die alten Antworten. Sofort leeren: `docker compose exec valkey valkey-cli flushdb`.
+- **Fail open:** Antwortet Valkey nicht, fragt PlaceFinder die Datenbank und schreibt einmal eine Warnung ins Log; `/health` meldet `"cache": "unavailable"`. Ein Cache darf den Dienst schneller machen, nie unerreichbar. Kurze Timeouts (0,2 s) verhindern, dass ein hängender Cache jede Anfrage bremst.
+- **Speicher:** `compose.yaml` begrenzt Valkey auf 64 MB; ist der Speicher voll, verdrängt `allkeys-lru` die am längsten nicht genutzten Schlüssel. Gespeichert wird nichts auf der Platte – ein Cache lässt sich jederzeit neu füllen.
+
+**Tests mit Valkey:** Die Tests nutzen eine kleine Attrappe des Valkey-Clients; mit `TEST_VALKEY_URL` läuft ein Test zusätzlich gegen ein echtes Valkey (Datenbank 15, nur eigene Schlüssel).
+
+```bash
+TEST_VALKEY_URL=valkey://localhost:6379/15 uv run pytest
+```
+
 ## Konfiguration
 
 | Umgebungsvariable | Standard | Bedeutung |
 |---|---|---|
 | `DATABASE_URL` | – | ab `t06`: PostgreSQL mit PostGIS statt der Datei, z. B. `postgresql://pf:pf@localhost:5432/pf` |
 | `DATA_FILE` | `data/cities15000.txt` (relativ zum Arbeitsverzeichnis) | GeoNames-Datei, die beim Start geladen wird, wenn `DATABASE_URL` fehlt |
+| `VALKEY_URL` | – | ab `t07`: Cache für Suchen in Valkey, z. B. `valkey://localhost:6379/0` |
+| `CACHE_TTL` | `300` | ab `t07`: Sekunden, die eine Suche im Cache bleibt |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warning` oder `error`; mit `debug` erscheint jede Suche im Log |
 | `CORS_ORIGINS` | `http://localhost:5173` | Herkünfte (Schema, Host, Port) von Webseiten, die die API im Browser aufrufen dürfen, durch Kommas getrennt; leer: keine |
 
@@ -243,9 +292,9 @@ curl --silent --head --header "Authorization: Bearer $token" \
 ### Image bauen und starten
 
 ```bash
-docker build --tag placefinder:0.6.0 .       # Image bauen (erster Build einige Minuten)
-docker history placefinder:0.6.0             # Schichten mit Größe
-docker run --rm --publish 8000:8000 placefinder:0.6.0
+docker build --tag placefinder:0.7.0 .       # Image bauen (erster Build einige Minuten)
+docker history placefinder:0.7.0             # Schichten mit Größe
+docker run --rm --publish 8000:8000 placefinder:0.7.0
 curl "http://localhost:8000/v1/places?q=Erfurt"  # in einem zweiten Terminal
 ```
 
@@ -275,12 +324,12 @@ RUN uv sync --locked --no-dev
 CMD [".venv/bin/uvicorn", "placefinder.main:app", "--host", "0.0.0.0"]
 EOF
 docker images placefinder                                       # Größen vergleichen
-trivy image --severity HIGH,CRITICAL placefinder:0.6.0          # Schwachstellen
+trivy image --severity HIGH,CRITICAL placefinder:0.7.0          # Schwachstellen
 trivy image --severity HIGH,CRITICAL placefinder:single
 ```
 
 Fehlt `trivy` im Dev Container, geht es auch mit dem Image von Trivy:
-`docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.6.0`
+`docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.7.0`
 (feste Version: Einige Trivy-Images vom März 2026 waren manipuliert, deshalb nie ohne Tag)
 
 ### Trivy-Bericht lesen
@@ -298,7 +347,7 @@ Bei PlaceFinder (Stand `t02`) sind alle Python-Pakete der virtuellen Umgebung oh
 Die Python-Funde des Base-Images (`msgpack`, `urllib3`, `setuptools`) stammen aus pip, das diese Pakete in sich mitbringt. Im laufenden Container wird pip nicht gebraucht; die Runtime-Stufe entfernt es deshalb. Prüfen lässt sich die Herkunft eines Funds über den Pfad im JSON-Bericht:
 
 ```bash
-trivy image --format json placefinder:0.6.0 \
+trivy image --format json placefinder:0.7.0 \
   | jq --raw-output '.Results[] | .Vulnerabilities[]? | "\(.PkgName) \(.InstalledVersion) \(.PkgPath // "-")"'
 ```
 
@@ -312,15 +361,15 @@ Optional in Termin 2, nötig ab Termin 3 (die Container-Dienste laden das Image 
 gh auth login                                 # einmalig, falls noch nicht angemeldet
 gh auth refresh --scopes write:packages       # Recht zum Hochladen von Paketen
 gh auth token | docker login ghcr.io --username <github-user> --password-stdin
-docker tag placefinder:0.6.0 ghcr.io/<github-user>/placefinder:t06
-docker push ghcr.io/<github-user>/placefinder:t06
+docker tag placefinder:0.7.0 ghcr.io/<github-user>/placefinder:t07
+docker push ghcr.io/<github-user>/placefinder:t07
 ```
 
 Ein neues Paket ist zunächst privat. Für Termin 3 auf GitHub unter *Packages* → *placefinder* → *Package settings* → *Change visibility* auf **Public** stellen.
 
 ### Compose: zwei Dienste
 
-`compose.yaml` startet zwei Dienste: PlaceFinder (`api`) und `web`, einen winzigen Webserver aus dem offiziellen Image `busybox` (rund 2 MB). Ab `t06` kommt als dritter Dienst die Datenbank `db` dazu (Abschnitt [Datenbank](#datenbank)).
+`compose.yaml` startet zwei Dienste: PlaceFinder (`api`) und `web`, einen winzigen Webserver aus dem offiziellen Image `busybox` (rund 2 MB). Ab `t06` kommt als dritter Dienst die Datenbank `db` dazu (Abschnitt [Datenbank](#datenbank)), ab `t07` der Cache `valkey` und der Object Storage `seaweedfs` mit S3-API auf Port 8333 (Abschnitte [Cache](#cache) und [Eigene Kacheln](#eigene-kacheln-pmtiles)).
 
 > **Warum ein zweiter Dienst, der nichts mit PlaceFinder zu tun hat?**
 > Mit nur einem Dienst wäre `compose.yaml` ein längerer `docker run`-Befehl. Erst mit zwei Diensten zeigt sich, was Compose leistet:
@@ -331,7 +380,7 @@ Ein neues Paket ist zunächst privat. Für Termin 3 auf GitHub unter *Packages* 
 cd /workspaces/placefinder                    # compose.yaml liegt hier
 docker ps                                     # läuft noch ein Container auf Port 8000? stoppen
 docker compose up --detach                    # bauen (falls nötig) und starten
-docker compose ps                             # web: healthy, api: running (ab t06 auch db: healthy)
+docker compose ps                             # web: healthy, api: running (ab t06 auch db, ab t07 valkey, seaweedfs)
 curl http://localhost:8080/                   # Startseite von web, liegt im Volume
 docker compose exec api python -c "import urllib.request; print(urllib.request.urlopen('http://web:8080/').read().decode())"
 docker compose exec web sh -c 'echo "Changed" > /www/index.html'
@@ -342,7 +391,7 @@ docker compose down --volumes                 # zusätzlich das Volume löschen
 ```
 
 - **Netz:** Der Aufruf aus `api` erreicht `web` über den Dienstnamen als Hostnamen (`http://web:8080/`); Port 8080 auf dem Rechner braucht er dafür nicht.
-- **Reihenfolge:** `api` startet erst, wenn `web` den Healthcheck besteht (`wget` auf die Startseite), ab `t06` auch `db` (`pg_isready`).
+- **Reihenfolge:** `api` startet erst, wenn `web` den Healthcheck besteht (`wget` auf die Startseite), ab `t06` auch `db` (`pg_isready`), ab `t07` auch `valkey` (`valkey-cli ping`).
 - **Volume:** `web` legt die Startseite beim ersten Start im Volume `www` an. Änderungen überstehen `docker compose down`; erst `down --volumes` löscht sie.
 
 Häufige Fehler:
@@ -379,13 +428,13 @@ curl "http://localhost:8000/v1/places?q=Erfurt"
 ### Neue Version ausrollen
 
 ```bash
-uv version 0.6.1 --no-sync                          # Version in pyproject.toml und uv.lock
-../cloud-labs-<anbieter>/t03-container/build-image.sh   # baut placefinder:0.6.1, lädt es in den Cluster
-kubectl set image deployment/placefinder api=placefinder:0.6.1
+uv version 0.7.1 --no-sync                          # Version in pyproject.toml und uv.lock
+../cloud-labs-<anbieter>/t03-container/build-image.sh   # baut placefinder:0.7.1, lädt es in den Cluster
+kubectl set image deployment/placefinder api=placefinder:0.7.1
 kubectl rollout status deployment/placefinder
-curl http://localhost:8000/                         # "version": "0.6.1"
-kubectl rollout undo deployment/placefinder         # zurück zu 0.6.0
-git restore pyproject.toml uv.lock                  # Version im Repository wieder 0.6.0
+curl http://localhost:8000/                         # "version": "0.7.1"
+kubectl rollout undo deployment/placefinder         # zurück zu 0.7.0
+git restore pyproject.toml uv.lock                  # Version im Repository wieder 0.7.0
 ```
 
 ### Konfiguration ändern
@@ -437,7 +486,8 @@ uv run ruff format      # Formatierung
 ```
 start.sh                    # starts the server locally (WSL or dev container)
 Dockerfile, .dockerignore   # container image with the GeoNames data (from t02)
-compose.yaml                # PlaceFinder, a small practice service (from t02), PostGIS (from t06)
+compose.yaml                # PlaceFinder, a small practice service (from t02), PostGIS (from t06),
+                            # Valkey and SeaweedFS (from t07)
 deploy/k8s/                 # Kubernetes manifests (from t03)
 deploy/hpa.yaml             # Horizontal Pod Autoscaler (from t03)
 deploy/helm/                # Helm chart and values per environment (from t03)
@@ -448,7 +498,8 @@ src/placefinder/geo.py      # bounding boxes and distances (from t05)
 src/placefinder/repository.py # Place, search query and the interface of a place store (from t06)
 src/placefinder/places.py   # GeoNames parser, in-memory repository with name index
 src/placefinder/db.py       # repository in PostgreSQL with PostGIS (from t06)
-frontend/index.html         # map with MapLibre GL JS (from t05)
+src/placefinder/cache.py    # cache-aside for searches in Valkey (from t07)
+frontend/index.html         # map with MapLibre GL JS (from t05), own PMTiles base map (from t07)
 data/download.sh            # downloads GeoNames dumps; data files are not committed
 tests/                      # pytest tests with a small sample of GeoNames lines
 ```
@@ -464,8 +515,9 @@ Code, Kommentare und Commit-Messages sind auf Englisch.
 | `t03` | Kubernetes-Manifeste, Autoscaler und Helm-Chart unter `deploy/`; Log-Level über `LOG_LEVEL` |
 | `t05` | v1: REST-API unter `/v1` mit GeoJSON, Filtern, Cursor-Paginierung, ETags und Problem Details; Karte unter `frontend/`; v0 veraltet (Version 0.5.0) |
 | `t06` | Orte aus PostgreSQL mit PostGIS, wenn `DATABASE_URL` gesetzt ist; Dienst `db` in `compose.yaml` (Version 0.6.0) |
+| `t07` | Cache für Suchen in Valkey (`VALKEY_URL`, `Cache-Status`); Karte mit eigener Basiskarte aus PMTiles (`?tiles=`); Dienste `valkey` und `seaweedfs` in `compose.yaml` (Version 0.7.0) |
 
-Termin 4 (Netzwerke) ändert PlaceFinder nicht und hat keinen eigenen Tag. Die weiteren Stände folgen als Tags `t07`, `t08` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
+Termin 4 (Netzwerke) ändert PlaceFinder nicht und hat keinen eigenen Tag. Die weiteren Stände folgen als Tags `t08`, `t09` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
 
 ## Daten und Lizenz
 

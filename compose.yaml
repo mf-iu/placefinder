@@ -1,21 +1,26 @@
-# PlaceFinder, its database and a second service to practise Compose.
-# web is a tiny web server (BusyBox httpd, about 2 MB) that has nothing to
-# do with PlaceFinder. It shows what Compose adds to docker run: a shared
-# network with service names, a start order with health check and a named
-# volume. db is PostgreSQL with PostGIS (from session 6); the lab script
-# t06-datenbank/load-cities.sh loads the places into it.
+# PlaceFinder with database, cache and object storage, and a second service
+# to practise Compose. web is a tiny web server (BusyBox httpd, about 2 MB)
+# that has nothing to do with PlaceFinder. It shows what Compose adds to
+# docker run: a shared network with service names, a start order with health
+# check and a named volume. db is PostgreSQL with PostGIS (from session 6); the
+# lab script t06-datenbank/load-cities.sh loads the places into it. valkey
+# caches searches, seaweedfs is object storage with the S3 API for raw data and
+# map tiles (both from session 7).
 # Start: docker compose up --detach   Stop: docker compose down (--volumes also deletes the volumes)
 services:
   api:
     build: .
-    image: placefinder:0.6.0
+    image: placefinder:0.7.0
     ports: ["8000:8000"]
-    # with the database instead of the places in memory, after load-cities.sh:
-    # environment: {DATABASE_URL: "postgresql://pf:pf@db:5432/pf"}
+    environment:
+      VALKEY_URL: valkey://valkey:6379/0
+      # with the database instead of the places in memory, after load-cities.sh:
+      # DATABASE_URL: postgresql://pf:pf@db:5432/pf
     depends_on:
-      # start api only after web and db pass their health checks
+      # start api only after web, db and valkey pass their health checks
       web: {condition: service_healthy}
       db: {condition: service_healthy}
+      valkey: {condition: service_healthy}
   web:
     image: busybox:1.37
     # create a start page in the volume on the first start, then serve /www
@@ -41,7 +46,36 @@ services:
       # --host 127.0.0.1: check via TCP, the init server only listens on the socket
       test: pg_isready --host 127.0.0.1 --username pf
       interval: 5s
+  valkey:
+    image: valkey/valkey:9.0
+    # a cache: memory only, nothing saved to disk; when 64 MB are full,
+    # Valkey drops the least recently used keys
+    command: >-
+      valkey-server --save "" --appendonly no
+      --maxmemory 64mb --maxmemory-policy allkeys-lru
+    ports: ["127.0.0.1:6379:6379"]       # reachable from this computer only
+    healthcheck:
+      test: valkey-cli ping
+      interval: 5s
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48
+    # all components in one process: master, volume server, filer and the
+    # S3 API on port 8333; WebDAV, admin UI and table catalogs are not needed
+    command: >-
+      mini -dir=/data -webdav=false -admin.ui=false
+      -s3.port.iceberg=0 -s3.port.lance=0
+    environment:
+      # with credentials every request must be signed: the bucket is private
+      AWS_ACCESS_KEY_ID: placefinder
+      AWS_SECRET_ACCESS_KEY: placefinder-local    # local development only
+      S3_BUCKET: placefinder                      # created at startup
+    ports: ["127.0.0.1:8333:8333"]       # S3 API, from this computer only
+    volumes: [s3data:/data]
+    healthcheck:
+      test: curl --fail --silent --output /dev/null http://127.0.0.1:8333/healthz
+      interval: 5s
 
 volumes:
   www:
   pgdata:
+  s3data:

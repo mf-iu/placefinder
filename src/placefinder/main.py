@@ -6,13 +6,15 @@ ETags and errors as problem details. The unversioned endpoints of stage v0
 
 With DATABASE_URL set, the places come from PostgreSQL with PostGIS (from
 session 6, db.py); otherwise PlaceFinder loads the GeoNames file DATA_FILE
-into memory at startup (places.py).
+into memory at startup (places.py). With VALKEY_URL set, searches go through a
+cache in Valkey (from session 7, cache.py).
 
 Start for development:  uv run fastapi dev src/placefinder/main.py
 Start for production:   uvicorn placefinder.main:app --host 0.0.0.0 --port 8000
 Settings: DATABASE_URL (PostgreSQL connection string), DATA_FILE (GeoNames text
-file), LOG_LEVEL (default info), CORS_ORIGINS (origins of web pages that may
-call the API)
+file), VALKEY_URL (cache, e.g. valkey://localhost:6379/0), CACHE_TTL (seconds a
+search stays in the cache, default 300), LOG_LEVEL (default info), CORS_ORIGINS
+(origins of web pages that may call the API)
 """
 
 import logging
@@ -31,6 +33,8 @@ from fastapi.responses import JSONResponse
 from psycopg import OperationalError
 
 from placefinder.api import create_router, repository
+from placefinder.cache import SearchCache
+from placefinder.cache import describe as describe_cache
 from placefinder.db import PostgisRepository, describe
 from placefinder.places import PlaceRepository
 from placefinder.problems import Problem, add_problem_handlers, documented, problem_response
@@ -54,31 +58,56 @@ logger = logging.getLogger("uvicorn.error")
 logger.setLevel(os.environ.get("LOG_LEVEL", "info").upper())
 
 
+def open_cache() -> SearchCache | None:
+    """The cache in Valkey with VALKEY_URL, else None. Unlike the database, a
+    missing cache does not stop the start: searches then go to the store."""
+    url = os.environ.get("VALKEY_URL")
+    if not url:
+        return None
+    cache = SearchCache(url, ttl=int(os.environ.get("CACHE_TTL", "300")))
+    if cache.ping():
+        logger.info("Caching searches in Valkey at %s for %d s", describe_cache(url), cache.ttl)
+    else:
+        cache.available = False
+        logger.warning(
+            "Valkey at %s does not answer; searches go to the store", describe_cache(url)
+        )
+    return cache
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Choose the place store once at startup, before the first request:
-    PostGIS with DATABASE_URL, otherwise the GeoNames file in memory."""
-    if url := os.environ.get("DATABASE_URL"):
-        db = PostgisRepository(url)
-        db.open()  # fails early if the database or the table places is missing
-        logger.info("Using PostGIS at %s with about %d places", describe(url), db.count())
-        app.state.repo = db
-        try:
-            yield
-        finally:
-            db.close()
-        return
-    path = Path(os.environ.get("DATA_FILE", DEFAULT_DATA_FILE))
-    if not path.is_file():
-        raise RuntimeError(f"Data file {path} not found. Run data/download.sh or set DATA_FILE.")
-    start = time.perf_counter()
-    memory = PlaceRepository()
-    memory.load(path)
-    logger.info(
-        "Loaded %d places from %s in %.1f s", len(memory), path, time.perf_counter() - start
-    )
-    app.state.repo = memory
-    yield
+    PostGIS with DATABASE_URL, otherwise the GeoNames file in memory. Open the
+    cache with VALKEY_URL."""
+    app.state.cache = open_cache()
+    try:
+        if url := os.environ.get("DATABASE_URL"):
+            db = PostgisRepository(url)
+            db.open()  # fails early if the database or the table places is missing
+            logger.info("Using PostGIS at %s with about %d places", describe(url), db.count())
+            app.state.repo = db
+            try:
+                yield
+            finally:
+                db.close()
+            return
+        path = Path(os.environ.get("DATA_FILE", DEFAULT_DATA_FILE))
+        if not path.is_file():
+            raise RuntimeError(
+                f"Data file {path} not found. Run data/download.sh or set DATA_FILE."
+            )
+        start = time.perf_counter()
+        memory = PlaceRepository()
+        memory.load(path)
+        logger.info(
+            "Loaded %d places from %s in %.1f s", len(memory), path, time.perf_counter() - start
+        )
+        app.state.repo = memory
+        yield
+    finally:
+        if app.state.cache:
+            app.state.cache.close()
 
 
 app = FastAPI(
@@ -112,7 +141,7 @@ app.add_middleware(
     allow_origins=[o for o in os.environ.get("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",") if o],
     allow_methods=["GET"],
     allow_headers=["If-None-Match"],
-    expose_headers=["ETag", "Link"],
+    expose_headers=["ETag", "Link", "Cache-Status"],
 )
 
 
@@ -129,9 +158,15 @@ def about() -> dict[str, str]:
 
 
 @app.get("/health")
-def health(repo: Annotated[Repository, Depends(repository)]) -> dict[str, str | int]:
-    """Health check; also reports the number of places (estimated with PostGIS)."""
-    return {"status": "ok", "places": repo.count()}
+def health(
+    request: Request, repo: Annotated[Repository, Depends(repository)]
+) -> dict[str, str | int]:
+    """Health check; also reports the number of places (estimated with PostGIS)
+    and, with a cache, whether Valkey answers. A missing cache is no failure."""
+    result: dict[str, str | int] = {"status": "ok", "places": repo.count()}
+    if cache := request.app.state.cache:
+        result["cache"] = "ok" if cache.ping() else "unavailable"
+    return result
 
 
 @app.get("/places", deprecated=True, tags=["v0"], responses=documented(422))

@@ -7,6 +7,11 @@
     python3 -m http.server 5173 --directory frontend
   then open http://localhost:5173. The API runs on port 8000 and allows
   this origin via CORS (CORS_ORIGINS). Another API: ?api=https://...
+
+  Base map: by default the vector tiles of OpenFreeMap. With ?tiles=<URL of a
+  PMTiles file> (from session 7) the map reads its own tiles from one file in
+  object storage, with HTTP range requests (PMTiles 4, style of Protomaps).
+  The URL may be a pre-signed URL; it has to be URL-encoded.
 -->
 <html lang="de">
 <head>
@@ -14,6 +19,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PlaceFinder</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.14.0/dist/maplibre-gl.css">
+  <!-- only for ?tiles=: reading PMTiles files and the base map style of Protomaps -->
+  <script src="https://unpkg.com/pmtiles@4.5.0/dist/pmtiles.js"></script>
+  <script src="https://unpkg.com/@protomaps/basemaps@5.7.2/dist/basemaps.js"></script>
   <style>
     html, body, #map { height: 100%; margin: 0; }
     body { font-family: system-ui, sans-serif; }
@@ -32,12 +40,41 @@
     // version 6 is an ES module only; pinned version, as everything in the course
     import * as maplibregl from "https://unpkg.com/maplibre-gl@6.14.0/dist/maplibre-gl.mjs";
 
-    const api = new URLSearchParams(location.search).get("api") ?? "http://localhost:8000";
+    const params = new URLSearchParams(location.search);
+    const api = params.get("api") ?? "http://localhost:8000";
+    const tiles = params.get("tiles");  // URL of a PMTiles file, optional
     const status = document.getElementById("status");
+
+    // Base map from one PMTiles file: the pmtiles protocol turns each tile
+    // request of MapLibre into a range request for the bytes of that tile.
+    function ownTilesStyle(url) {
+      const protocol = new pmtiles.Protocol();
+      maplibregl.addProtocol("pmtiles", protocol.tile);
+      const archive = new pmtiles.PMTiles(url);
+      protocol.add(archive);  // the file under its URL, also with a query string
+      // show the area of the file: its header holds the bounding box
+      archive.getHeader().then((h) => map.fitBounds(
+        [[h.minLon, h.minLat], [h.maxLon, h.maxLat]], { animate: false }));
+      return {
+        version: 8,
+        glyphs: "https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf",
+        sprite: "https://protomaps.github.io/basemaps-assets/sprites/v4/light",
+        sources: {
+          protomaps: {
+            type: "vector",
+            url: `pmtiles://${url}`,
+            attribution: '<a href="https://protomaps.com">Protomaps</a> © '
+              + '<a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
+          },
+        },
+        layers: basemaps.layers("protomaps", basemaps.namedFlavor("light"), { lang: "de" }),
+      };
+    }
 
     const map = new maplibregl.Map({
       container: "map",
-      style: "https://tiles.openfreemap.org/styles/liberty",  // no key needed
+      // no key needed for either
+      style: tiles ? ownTilesStyle(tiles) : "https://tiles.openfreemap.org/styles/liberty",
       center: [11.03, 50.98],  // Erfurt: lon, lat
       zoom: 7,
       customAttribution: "Orte: GeoNames (CC BY 4.0)",

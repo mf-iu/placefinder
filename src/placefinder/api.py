@@ -1,5 +1,7 @@
 """REST API version 1: places as GeoJSON (RFC 7946) with filters, cursor
 pagination, caching headers and ETags. Errors are problem details (RFC 9457).
+Searches go through the cache in Valkey if there is one (cache.py, from
+session 7); the header Cache-Status (RFC 9211) tells whether it answered.
 """
 
 import base64
@@ -14,6 +16,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from placefinder.cache import SearchCache
 from placefinder.geo import BBox
 from placefinder.problems import Problem, documented
 from placefinder.repository import Place, Repository, SearchQuery, Sort
@@ -240,26 +243,36 @@ def create_router() -> APIRouter:
             country=country.upper() if country else None,
             after=decode_cursor(cursor, sort) if cursor is not None else None,
         )
+        self_href = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+
+        # cache-aside: first the cache, on a miss the store, then save the answer
+        cache: SearchCache | None = getattr(request.app.state, "cache", None)
+        key = cache.key(self_href) if cache else ""
+        if cache and (saved := cache.get(key)) is not None:
+            return search_response(saved["body"], saved["next"], "hit")
+
         hits = repo.find(query)
         page = hits[:limit]
 
         # links with the same parameters; the cursor marks the position
-        self_href = request.url.path + (f"?{request.url.query}" if request.url.query else "")
         links = [{"rel": "self", "type": MEDIA_TYPE, "href": self_href}]
         params = {k: v for k, v in request.query_params.items() if k != "cursor"}
-        headers = {"Cache-Control": SEARCH_CACHE}
+        next_href = None
         if len(hits) > limit:
             next_query = {**params, "cursor": encode_cursor(sort, page[-1].key)}
             next_href = f"{request.url.path}?{urlencode(next_query, safe=',')}"
             links.append({"rel": "next", "type": MEDIA_TYPE, "href": next_href})
-            headers["Link"] = f'<{next_href}>; rel="next"'
         logger.debug("Search %s: %d places", request.url.query, len(page))
         body = {
             "type": "FeatureCollection",
             "features": [feature(hit.place, hit.distance) for hit in page],
             "links": links,
         }
-        return GeoJSONResponse(body, headers=headers)
+        status = None
+        if cache:
+            stored = cache.put(key, {"body": body, "next": next_href})
+            status = "fwd=uri-miss; stored" if stored else "fwd=uri-miss"
+        return search_response(body, next_href, status)
 
     @router.get(
         "/places/{place_id}",
@@ -285,6 +298,20 @@ def create_router() -> APIRouter:
         return GeoJSONResponse(body, headers=headers)
 
     return router
+
+
+def search_response(
+    body: dict[str, Any], next_href: str | None, cache_status: str | None
+) -> GeoJSONResponse:
+    """A page of search results with caching headers, the link to the next page
+    and, with a cache, Cache-Status (RFC 9211): hit, or a miss forwarded to the
+    store whose answer was stored."""
+    headers = {"Cache-Control": SEARCH_CACHE}
+    if next_href:
+        headers["Link"] = f'<{next_href}>; rel="next"'
+    if cache_status:
+        headers["Cache-Status"] = f"PlaceFinder; {cache_status}"
+    return GeoJSONResponse(body, headers=headers)
 
 
 def etag_matches(if_none_match: str | None, etag: str) -> bool:

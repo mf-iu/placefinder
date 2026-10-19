@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: placefinder:0.6.0  # fixed version tag, never latest
+          image: placefinder:0.7.0  # fixed version tag, never latest
           ports:
             - containerPort: 8000   # port of the application
           envFrom:                  # all keys of the ConfigMap as variables
