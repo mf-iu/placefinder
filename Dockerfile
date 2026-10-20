@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # PlaceFinder image: GeoNames data, virtual environment, unprivileged runtime.
-# Build: docker build --tag placefinder:0.7.0 .
-# Run:   docker run --rm --publish 8000:8000 placefinder:0.7.0
+# Build: docker build --tag placefinder:0.8.0 .
+# Run:   docker run --rm --publish 8000:8000 placefinder:0.8.0
 
 # GeoNames dump that is baked into the image, e.g. cities5000 or DE
 ARG GEONAMES_FILE=cities15000
@@ -42,6 +42,8 @@ RUN useradd --system --uid 10001 app \
 COPY --from=build /app/.venv /app/.venv
 COPY --from=data /data /data
 ENV DATA_FILE=/data/${GEONAMES_FILE}.txt
+# commands of the virtual environment on the path, e.g. placefinder-load
+ENV PATH=/app/.venv/bin:$PATH
 USER app
 # document the port; publish it with docker run --publish
 EXPOSE 8000

@@ -10,6 +10,8 @@ Beispielanwendung des Kurses „Cloud Computing“: ein Dienst zur Ortssuche auf
 
 **Stand mit Cache und eigenen Kacheln (Tag `t07`, Version 0.7.0):** Ist `VALKEY_URL` gesetzt, hält PlaceFinder die Antworten der Suche einige Minuten in Valkey (Abschnitt [Cache](#cache)). Die Karte liest ihre Basiskarte auf Wunsch aus einer einzigen PMTiles-Datei im Object Storage (Abschnitt [Eigene Kacheln](#eigene-kacheln-pmtiles)). `compose.yaml` enthält dafür die Dienste `valkey` und `seaweedfs`.
 
+**Stand mit Pipeline und Telemetrie (Tag `t08`, Version 0.8.0):** Eine CI-Pipeline mit GitHub Actions prüft jeden Push, baut das Image, scannt es, lädt es mit SBOM in die GitHub Container Registry und signiert es (Abschnitt [Pipeline](#pipeline)). Ist `OTEL_EXPORTER_OTLP_ENDPOINT` gesetzt, sendet PlaceFinder Traces und Metriken mit OpenTelemetry (Abschnitt [Beobachtbarkeit](#beobachtbarkeit)). Mit `DATABASE_INIT=true` füllt PlaceFinder eine leere Datenbank selbst – nötig, wenn die Datenbank in einem privaten Netz liegt (Abschnitt [Datenbank selbst füllen](#datenbank-selbst-füllen)).
+
 ## Einrichtung
 
 Voraussetzung ist der Dev Container eines Übungs-Repositorys (`cloud-labs-aws`, `cloud-labs-azure` oder `cloud-labs-gcp`, siehe dessen README). Ohne Dev Container genügt die Ubuntu-Shell in WSL: `start.sh` installiert [uv](https://docs.astral.sh/uv/) bei Bedarf, uv lädt ein passendes Python.
@@ -190,11 +192,27 @@ Dieselbe Variable mit der Verbindungszeichenkette aus `create-db.sh` verbindet P
 - **Parameter:** Alle Werte gehen als Platzhalter (`%(name)s`) getrennt vom SQL-Text an den Server – Schutz vor SQL-Injection.
 - **`/health`:** meldet die geschätzte Zahl der Orte (`reltuples`); ein `count(*)` läse bei jedem Health Check die ganze Tabelle.
 
-**Tests gegen PostGIS:** Mit `TEST_DATABASE_URL` laufen alle API-Tests ein zweites Mal gegen PostGIS. Die Tests legen ein eigenes Schema mit den Beispielorten an und löschen es danach.
+**Tests gegen PostGIS:** Mit `TEST_DATABASE_URL` laufen alle API-Tests ein zweites Mal gegen PostGIS. Die Tests legen ein eigenes Schema mit den Beispielorten an und löschen es danach; die Tests zum Laden (`tests/test_load.py`) legen je eine eigene Datenbank an.
 
 ```bash
 TEST_DATABASE_URL=postgresql://pf:pf@localhost:5432/pf uv run pytest
 ```
+
+### Datenbank selbst füllen
+
+Ab Tag `t08`. In Termin 6 lädt `load-cities.sh` die Orte vom eigenen Rechner aus in die Datenbank. Liegt die Datenbank wie in Termin 8 in einem privaten Netz, ist sie vom eigenen Rechner aus nicht erreichbar. Das Image enthält die GeoNames-Datei aber schon (`DATA_FILE`), also kann PlaceFinder die Tabelle selbst anlegen – mit denselben Schritten wie `load-cities.sh` (`src/placefinder/load.py`):
+
+```bash
+docker compose up --detach db
+export DATABASE_URL=postgresql://pf:pf@localhost:5432/pf
+uv run placefinder-load data/cities15000.txt            # einmal laden; --replace lädt neu
+DATABASE_INIT=true uv run fastapi dev src/placefinder/main.py   # oder: beim Start laden, wenn die Tabelle fehlt
+docker compose exec api placefinder-load                 # im Container, mit der Datei aus dem Image
+```
+
+- **Eine Transaktion:** Tabelle, `COPY` und Indizes entstehen zusammen; bricht das Laden ab, bleibt nichts zurück.
+- **Advisory Lock:** Starten mehrere Instanzen gleichzeitig mit `DATABASE_INIT=true`, lädt nur die erste; die anderen warten und finden danach die Tabelle.
+- **Im Kurs eine Vereinfachung:** In Produktion gehört das Schema in versionierte Migrationen (z. B. Alembic), die die Pipeline einmal vor dem Ausrollen ausführt – nicht jede Instanz beim Start.
 
 ## Cache
 
@@ -225,6 +243,65 @@ docker compose exec valkey valkey-cli ttl 'placefinder:v1:/v1/places?q=Erfurt'  
 TEST_VALKEY_URL=valkey://localhost:6379/15 uv run pytest
 ```
 
+## Pipeline
+
+Ab Tag `t08`. Musterlösung zu Termin 8: `.github/workflows/ci.yml` läuft bei jedem Push und jedem Pull Request.
+
+| Job | Schritte |
+|---|---|
+| `test` | `uv sync --locked`, `ruff check`, `ruff format --check`, `pytest` – auch gegen PostGIS und Valkey, die als Service-Container des Jobs laufen |
+| `image` | Image bauen, mit Trivy scannen (bricht bei behebbaren Schwachstellen HIGH oder CRITICAL ab); auf `master` und bei Tags: in die GitHub Container Registry laden mit SBOM und Provenance, mit cosign signieren |
+
+- **Images:** `ghcr.io/<github-user>/placefinder:<commit>` und `:<branch oder tag>`, z. B. `:master` oder nach `git push origin t08` das Image `:t08`. Pull Requests werden gebaut und gescannt, aber nicht hochgeladen.
+- **Ohne gespeicherte Geheimnisse:** Das Hochladen erlaubt der `GITHUB_TOKEN` des Laufs (`packages: write`), das Signieren ein kurzlebiges Zertifikat von Sigstore für den OIDC-Token des Workflows (`id-token: write`). Ausrollen beim Anbieter: `t08-iac/deploy.example.yml` im Übungs-Repository, ebenfalls ohne gespeicherte Schlüssel.
+- **Gepinnte Actions:** Jede Action ist auf den Commit eines Releases festgelegt, nicht auf einen Tag wie `v7` – ein Tag lässt sich später auf anderen Code umhängen, so geschehen im März 2026 mit `trivy-action`. Dependabot (`.github/dependabot.yml`) schlägt wöchentlich neue Versionen der Actions, der Python-Pakete und der Basis-Images vor.
+- **Im eigenen Fork:** Unter *Actions* die Workflows einmal aktivieren. Ein neues Paket ist privat; für die Cloud-Dienste auf **Public** stellen (Abschnitt [Image in die GitHub Container Registry laden](#image-in-die-github-container-registry-laden)).
+
+Signatur, SBOM und Provenance prüfen (im Dev Container, mit dem Digest aus der Zusammenfassung des Laufs):
+
+```bash
+image=ghcr.io/<github-user>/placefinder@sha256:<digest>
+cosign verify "$image" \
+  --certificate-identity-regexp 'https://github.com/<github-user>/placefinder/.github/workflows/ci.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+docker buildx imagetools inspect "$image" --format '{{json .SBOM}}' | head --bytes 600
+docker buildx imagetools inspect "$image" --format '{{json .Provenance}}' | head --bytes 600
+```
+
+## Beobachtbarkeit
+
+Ab Tag `t08`. `src/placefinder/telemetry.py` sendet Traces und Metriken mit [OpenTelemetry](https://opentelemetry.io) über OTLP, sobald `OTEL_EXPORTER_OTLP_ENDPOINT` gesetzt ist; ohne die Variable ist alles aus.
+
+- **Traces:** ein Span je Anfrage (FastAPI) mit einem Kind-Span je SQL-Anweisung (psycopg). Health Checks erzeugen keine Spans.
+- **Metriken:** die Dauer jeder Anfrage als Histogramm nach Route und Statuscode (`http.server.request.duration`, in Prometheus `http_server_request_duration_seconds`) – daraus folgen Rate, Fehler und Dauer (RED) – und die Zugriffe auf den Cache nach Ergebnis (`placefinder.cache.lookups`, in Prometheus `placefinder_cache_lookups_total`).
+- **Backend:** Der Dienst `lgtm` in `compose.yaml` (Image `grafana/otel-lgtm`) bündelt OpenTelemetry Collector, Prometheus, Tempo, Loki und Grafana in einem Container – nur für Entwicklung und Demos.
+
+```bash
+cd /workspaces/placefinder
+OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318 docker compose --profile observability up --detach --build
+for i in $(seq 300); do                                  # Last erzeugen
+  curl --silent --output /dev/null "http://localhost:8000/v1/places?q=Erf&limit=$(( i % 50 + 1 ))"
+done
+```
+
+Grafana unter http://localhost:3000 öffnen (ohne Anmeldung): *Dashboards* → *RED Metrics (classic histogram)*, Auswahl `job` = `placefinder`. Unter *Explore* → *Tempo* die Traces einer Suche ansehen, unter *Explore* → *Prometheus* eigene Abfragen:
+
+```promql
+# Anteil der Anfragen ohne Serverfehler (SLI Verfügbarkeit), letzte 5 Minuten
+sum(rate(http_server_request_duration_seconds_count{http_response_status_code!~"5.."}[5m]))
+  / sum(rate(http_server_request_duration_seconds_count[5m]))
+# Anteil der Anfragen unter 250 ms (SLI Latenz)
+sum(rate(http_server_request_duration_seconds_bucket{le="0.25"}[5m]))
+  / sum(rate(http_server_request_duration_seconds_count[5m]))
+# Trefferquote des Caches
+sum(rate(placefinder_cache_lookups_total{cache_result="hit"}[5m]))
+  / sum(rate(placefinder_cache_lookups_total[5m]))
+```
+
+Fehler sichtbar machen: In `compose.yaml` `DATABASE_URL` und `DATABASE_INIT` einkommentieren, neu starten, dann `docker compose stop db` – die Suche antwortet mit `503`, die Fehlerrate im Dashboard steigt. Ohne Compose: `docker compose --profile observability up --detach lgtm` und PlaceFinder mit `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 ./start.sh` starten.
+
+Weitere Einstellungen kommen aus den Standardvariablen des OpenTelemetry-SDK, z. B. `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` oder `OTEL_TRACES_SAMPLER`. Derselbe Code sendet so an jedes Backend, das OTLP versteht – auch an die Dienste der Cloud-Anbieter.
+
 ## Konfiguration
 
 | Umgebungsvariable | Standard | Bedeutung |
@@ -235,6 +312,10 @@ TEST_VALKEY_URL=valkey://localhost:6379/15 uv run pytest
 | `CACHE_TTL` | `300` | ab `t07`: Sekunden, die eine Suche im Cache bleibt |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warning` oder `error`; mit `debug` erscheint jede Suche im Log |
 | `CORS_ORIGINS` | `http://localhost:5173` | Herkünfte (Schema, Host, Port) von Webseiten, die die API im Browser aufrufen dürfen, durch Kommas getrennt; leer: keine |
+| `DATABASE_INIT` | `false` | ab `t08`: mit `true` legt PlaceFinder beim Start die Tabelle `places` an und lädt `DATA_FILE`, wenn die Tabelle fehlt |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | – | ab `t08`: Ziel für Traces und Metriken über OTLP/HTTP, z. B. `http://localhost:4318`; leer: keine Telemetrie |
+| `OTEL_SERVICE_NAME` | `placefinder` | ab `t08`: Name des Dienstes in Traces und Metriken |
+| `OTEL_METRIC_EXPORT_INTERVAL` | `60000` | ab `t08`: Millisekunden zwischen zwei Sendungen der Metriken |
 
 Fehlt die Datei, bricht der Start mit einer Meldung ab. `data/download.sh` lädt auch andere GeoNames-Dateien, z. B. `data/download.sh cities5000` (Orte ab 5.000 Einwohnern) oder `data/download.sh DE` (alle Einträge für Deutschland, auch Berge, Gewässer usw.); dann `DATA_FILE=data/DE.txt uv run fastapi dev src/placefinder/main.py` oder kurz `./start.sh --data DE`. Größere Dateien brauchen entsprechend mehr Speicher und Startzeit. Mit `cities15000` belegt PlaceFinder rund 130 MB Arbeitsspeicher und startet in etwa einer Sekunde.
 
@@ -292,9 +373,9 @@ curl --silent --head --header "Authorization: Bearer $token" \
 ### Image bauen und starten
 
 ```bash
-docker build --tag placefinder:0.7.0 .       # Image bauen (erster Build einige Minuten)
-docker history placefinder:0.7.0             # Schichten mit Größe
-docker run --rm --publish 8000:8000 placefinder:0.7.0
+docker build --tag placefinder:0.8.0 .       # Image bauen (erster Build einige Minuten)
+docker history placefinder:0.8.0             # Schichten mit Größe
+docker run --rm --publish 8000:8000 placefinder:0.8.0
 curl "http://localhost:8000/v1/places?q=Erfurt"  # in einem zweiten Terminal
 ```
 
@@ -324,12 +405,12 @@ RUN uv sync --locked --no-dev
 CMD [".venv/bin/uvicorn", "placefinder.main:app", "--host", "0.0.0.0"]
 EOF
 docker images placefinder                                       # Größen vergleichen
-trivy image --severity HIGH,CRITICAL placefinder:0.7.0          # Schwachstellen
+trivy image --severity HIGH,CRITICAL placefinder:0.8.0          # Schwachstellen
 trivy image --severity HIGH,CRITICAL placefinder:single
 ```
 
 Fehlt `trivy` im Dev Container, geht es auch mit dem Image von Trivy:
-`docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.7.0`
+`docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.8.0`
 (feste Version: Einige Trivy-Images vom März 2026 waren manipuliert, deshalb nie ohne Tag)
 
 ### Trivy-Bericht lesen
@@ -347,7 +428,7 @@ Bei PlaceFinder (Stand `t02`) sind alle Python-Pakete der virtuellen Umgebung oh
 Die Python-Funde des Base-Images (`msgpack`, `urllib3`, `setuptools`) stammen aus pip, das diese Pakete in sich mitbringt. Im laufenden Container wird pip nicht gebraucht; die Runtime-Stufe entfernt es deshalb. Prüfen lässt sich die Herkunft eines Funds über den Pfad im JSON-Bericht:
 
 ```bash
-trivy image --format json placefinder:0.7.0 \
+trivy image --format json placefinder:0.8.0 \
   | jq --raw-output '.Results[] | .Vulnerabilities[]? | "\(.PkgName) \(.InstalledVersion) \(.PkgPath // "-")"'
 ```
 
@@ -355,14 +436,14 @@ Nur Funde mit verfügbarer Korrektur zeigt `trivy image --ignore-unfixed …` �
 
 ### Image in die GitHub Container Registry laden
 
-Optional in Termin 2, nötig ab Termin 3 (die Container-Dienste laden das Image von dort). Ab Termin 3 erledigt das `t03-container/build-image.sh --push` im Übungs-Repository; von Hand:
+Optional in Termin 2, nötig ab Termin 3 (die Container-Dienste laden das Image von dort). Ab Termin 3 erledigt das `t03-container/build-image.sh --push` im Übungs-Repository, ab Termin 8 die [Pipeline](#pipeline); von Hand:
 
 ```bash
 gh auth login                                 # einmalig, falls noch nicht angemeldet
 gh auth refresh --scopes write:packages       # Recht zum Hochladen von Paketen
 gh auth token | docker login ghcr.io --username <github-user> --password-stdin
-docker tag placefinder:0.7.0 ghcr.io/<github-user>/placefinder:t07
-docker push ghcr.io/<github-user>/placefinder:t07
+docker tag placefinder:0.8.0 ghcr.io/<github-user>/placefinder:t08
+docker push ghcr.io/<github-user>/placefinder:t08
 ```
 
 Ein neues Paket ist zunächst privat. Für Termin 3 auf GitHub unter *Packages* → *placefinder* → *Package settings* → *Change visibility* auf **Public** stellen.
@@ -428,13 +509,13 @@ curl "http://localhost:8000/v1/places?q=Erfurt"
 ### Neue Version ausrollen
 
 ```bash
-uv version 0.7.1 --no-sync                          # Version in pyproject.toml und uv.lock
-../cloud-labs-<anbieter>/t03-container/build-image.sh   # baut placefinder:0.7.1, lädt es in den Cluster
-kubectl set image deployment/placefinder api=placefinder:0.7.1
+uv version 0.8.1 --no-sync                          # Version in pyproject.toml und uv.lock
+../cloud-labs-<anbieter>/t03-container/build-image.sh   # baut placefinder:0.8.1, lädt es in den Cluster
+kubectl set image deployment/placefinder api=placefinder:0.8.1
 kubectl rollout status deployment/placefinder
-curl http://localhost:8000/                         # "version": "0.7.1"
-kubectl rollout undo deployment/placefinder         # zurück zu 0.7.0
-git restore pyproject.toml uv.lock                  # Version im Repository wieder 0.7.0
+curl http://localhost:8000/                         # "version": "0.8.1"
+kubectl rollout undo deployment/placefinder         # zurück zu 0.8.0
+git restore pyproject.toml uv.lock                  # Version im Repository wieder 0.8.0
 ```
 
 ### Konfiguration ändern
@@ -487,7 +568,7 @@ uv run ruff format      # Formatierung
 start.sh                    # starts the server locally (WSL or dev container)
 Dockerfile, .dockerignore   # container image with the GeoNames data (from t02)
 compose.yaml                # PlaceFinder, a small practice service (from t02), PostGIS (from t06),
-                            # Valkey and SeaweedFS (from t07)
+                            # Valkey and SeaweedFS (from t07), OpenTelemetry backend (from t08)
 deploy/k8s/                 # Kubernetes manifests (from t03)
 deploy/hpa.yaml             # Horizontal Pod Autoscaler (from t03)
 deploy/helm/                # Helm chart and values per environment (from t03)
@@ -499,6 +580,10 @@ src/placefinder/repository.py # Place, search query and the interface of a place
 src/placefinder/places.py   # GeoNames parser, in-memory repository with name index
 src/placefinder/db.py       # repository in PostgreSQL with PostGIS (from t06)
 src/placefinder/cache.py    # cache-aside for searches in Valkey (from t07)
+src/placefinder/load.py     # creates and loads the table places, placefinder-load (from t08)
+src/placefinder/telemetry.py # traces and metrics with OpenTelemetry (from t08)
+.github/workflows/ci.yml    # CI pipeline: tests, image, scan, SBOM, signature (from t08)
+.github/dependabot.yml      # weekly updates of actions, packages and base images (from t08)
 frontend/index.html         # map with MapLibre GL JS (from t05), own PMTiles base map (from t07)
 data/download.sh            # downloads GeoNames dumps; data files are not committed
 tests/                      # pytest tests with a small sample of GeoNames lines
@@ -516,8 +601,9 @@ Code, Kommentare und Commit-Messages sind auf Englisch.
 | `t05` | v1: REST-API unter `/v1` mit GeoJSON, Filtern, Cursor-Paginierung, ETags und Problem Details; Karte unter `frontend/`; v0 veraltet (Version 0.5.0) |
 | `t06` | Orte aus PostgreSQL mit PostGIS, wenn `DATABASE_URL` gesetzt ist; Dienst `db` in `compose.yaml` (Version 0.6.0) |
 | `t07` | Cache für Suchen in Valkey (`VALKEY_URL`, `Cache-Status`); Karte mit eigener Basiskarte aus PMTiles (`?tiles=`); Dienste `valkey` und `seaweedfs` in `compose.yaml` (Version 0.7.0) |
+| `t08` | CI-Pipeline mit GitHub Actions (Tests, Image, Trivy, SBOM, cosign); Traces und Metriken mit OpenTelemetry; `placefinder-load` und `DATABASE_INIT`; Dienst `lgtm` in `compose.yaml` (Version 0.8.0) |
 
-Termin 4 (Netzwerke) ändert PlaceFinder nicht und hat keinen eigenen Tag. Die weiteren Stände folgen als Tags `t08`, `t09` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
+Termin 4 (Netzwerke) ändert PlaceFinder nicht und hat keinen eigenen Tag. Die weiteren Stände folgen als Tags `t09`, `t10` usw. `git tag` listet die vorhandenen, `git switch --detach t01` wechselt zu einem Stand.
 
 ## Daten und Lizenz
 

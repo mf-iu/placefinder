@@ -1,0 +1,20 @@
+# Dependabot opens pull requests for new versions (from session 8): the
+# pinned actions of the workflows, the Python packages in uv.lock and the
+# base images of the Dockerfile. The CI pipeline tests each of them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      opentelemetry:
+        patterns: ["opentelemetry-*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

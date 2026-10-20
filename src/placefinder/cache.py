@@ -17,6 +17,10 @@ compose.yaml it drops the least recently used keys when the memory is full.
 The cache is optional. Without VALKEY_URL there is none. If Valkey does not
 answer, PlaceFinder logs a warning and asks the store (fail open): a cache may
 make the service faster, never unavailable.
+
+Every lookup counts in the metric placefinder.cache.lookups with the result
+hit, miss or error (from session 8, telemetry.py); the hit ratio follows from
+it. Without OpenTelemetry the counter does nothing.
 """
 
 import json
@@ -25,9 +29,15 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import valkey
+from opentelemetry import metrics
 from valkey.exceptions import ValkeyError
 
 logger = logging.getLogger("uvicorn.error")
+
+# in Prometheus: placefinder_cache_lookups_total{cache_result="hit"}
+LOOKUPS = metrics.get_meter("placefinder").create_counter(
+    "placefinder.cache.lookups", unit="{lookup}", description="Lookups in the search cache"
+)
 
 PREFIX = "placefinder:v1:"
 
@@ -59,8 +69,10 @@ class SearchCache:
             raw = self.client.get(key)
         except ValkeyError as exc:
             self._failed(exc)
+            LOOKUPS.add(1, {"cache.result": "error"})
             return None
         self._answered()
+        LOOKUPS.add(1, {"cache.result": "miss" if raw is None else "hit"})
         return json.loads(raw) if raw is not None else None
 
     def put(self, key: str, value: dict[str, Any]) -> bool:

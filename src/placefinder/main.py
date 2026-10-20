@@ -7,14 +7,18 @@ ETags and errors as problem details. The unversioned endpoints of stage v0
 With DATABASE_URL set, the places come from PostgreSQL with PostGIS (from
 session 6, db.py); otherwise PlaceFinder loads the GeoNames file DATA_FILE
 into memory at startup (places.py). With VALKEY_URL set, searches go through a
-cache in Valkey (from session 7, cache.py).
+cache in Valkey (from session 7, cache.py). With OTEL_EXPORTER_OTLP_ENDPOINT
+set, PlaceFinder sends traces and metrics with OpenTelemetry (from session 8,
+telemetry.py).
 
 Start for development:  uv run fastapi dev src/placefinder/main.py
 Start for production:   uvicorn placefinder.main:app --host 0.0.0.0 --port 8000
 Settings: DATABASE_URL (PostgreSQL connection string), DATA_FILE (GeoNames text
 file), VALKEY_URL (cache, e.g. valkey://localhost:6379/0), CACHE_TTL (seconds a
 search stays in the cache, default 300), LOG_LEVEL (default info), CORS_ORIGINS
-(origins of web pages that may call the API)
+(origins of web pages that may call the API), DATABASE_INIT (true: create and
+load the table places from DATA_FILE if it is missing, load.py),
+OTEL_EXPORTER_OTLP_ENDPOINT and the other OTEL_* variables (telemetry.py)
 """
 
 import logging
@@ -30,12 +34,15 @@ from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from opentelemetry.instrumentation.utils import suppress_instrumentation
 from psycopg import OperationalError
 
+from placefinder import telemetry
 from placefinder.api import create_router, repository
 from placefinder.cache import SearchCache
 from placefinder.cache import describe as describe_cache
 from placefinder.db import PostgisRepository, describe
+from placefinder.load import load
 from placefinder.places import PlaceRepository
 from placefinder.problems import Problem, add_problem_handlers, documented, problem_response
 from placefinder.repository import Place, Repository, SearchQuery
@@ -75,14 +82,25 @@ def open_cache() -> SearchCache | None:
     return cache
 
 
+def data_file() -> Path:
+    """The GeoNames file of DATA_FILE; it must exist."""
+    path = Path(os.environ.get("DATA_FILE", DEFAULT_DATA_FILE))
+    if not path.is_file():
+        raise RuntimeError(f"Data file {path} not found. Run data/download.sh or set DATA_FILE.")
+    return path
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Choose the place store once at startup, before the first request:
     PostGIS with DATABASE_URL, otherwise the GeoNames file in memory. Open the
-    cache with VALKEY_URL."""
+    cache with VALKEY_URL. With DATABASE_INIT, fill an empty database first."""
     app.state.cache = open_cache()
     try:
         if url := os.environ.get("DATABASE_URL"):
+            if os.environ.get("DATABASE_INIT", "false").lower() in ("1", "true", "yes"):
+                # only the first instance loads, the others wait for it (load.py)
+                load(url, data_file())
             db = PostgisRepository(url)
             db.open()  # fails early if the database or the table places is missing
             logger.info("Using PostGIS at %s with about %d places", describe(url), db.count())
@@ -92,11 +110,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             finally:
                 db.close()
             return
-        path = Path(os.environ.get("DATA_FILE", DEFAULT_DATA_FILE))
-        if not path.is_file():
-            raise RuntimeError(
-                f"Data file {path} not found. Run data/download.sh or set DATA_FILE."
-            )
+        path = data_file()
         start = time.perf_counter()
         memory = PlaceRepository()
         memory.load(path)
@@ -117,6 +131,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 add_problem_handlers(app)
+# traces and metrics, only with OTEL_EXPORTER_OTLP_ENDPOINT
+telemetry.setup(app)
 
 
 # also PoolTimeout: no free connection in the pool within 30 seconds
@@ -163,7 +179,9 @@ def health(
 ) -> dict[str, str | int]:
     """Health check; also reports the number of places (estimated with PostGIS)
     and, with a cache, whether Valkey answers. A missing cache is no failure."""
-    result: dict[str, str | int] = {"status": "ok", "places": repo.count()}
+    # health checks come every few seconds; no spans for their SQL (telemetry.py)
+    with suppress_instrumentation():
+        result: dict[str, str | int] = {"status": "ok", "places": repo.count()}
     if cache := request.app.state.cache:
         result["cache"] = "ok" if cache.ping() else "unavailable"
     return result

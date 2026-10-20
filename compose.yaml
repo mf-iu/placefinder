@@ -5,17 +5,25 @@
 # check and a named volume. db is PostgreSQL with PostGIS (from session 6); the
 # lab script t06-datenbank/load-cities.sh loads the places into it. valkey
 # caches searches, seaweedfs is object storage with the S3 API for raw data and
-# map tiles (both from session 7).
+# map tiles (both from session 7). lgtm receives traces and metrics and shows
+# them in Grafana (from session 8); it only starts with the profile
+# observability, see the README, section Beobachtbarkeit.
 # Start: docker compose up --detach   Stop: docker compose down (--volumes also deletes the volumes)
 services:
   api:
     build: .
-    image: placefinder:0.7.0
+    image: placefinder:0.8.0
     ports: ["8000:8000"]
     environment:
       VALKEY_URL: valkey://valkey:6379/0
-      # with the database instead of the places in memory, after load-cities.sh:
+      # with the database instead of the places in memory; DATABASE_INIT
+      # loads the places from the image if the table does not exist yet:
       # DATABASE_URL: postgresql://pf:pf@db:5432/pf
+      # DATABASE_INIT: "true"
+      # traces and metrics, empty: off. With the profile observability:
+      # OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318 docker compose --profile observability up --detach
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_METRIC_EXPORT_INTERVAL: "10000"   # milliseconds; default 60000
     depends_on:
       # start api only after web, db and valkey pass their health checks
       web: {condition: service_healthy}
@@ -74,6 +82,15 @@ services:
     healthcheck:
       test: curl --fail --silent --output /dev/null http://127.0.0.1:8333/healthz
       interval: 5s
+
+  lgtm:
+    # OpenTelemetry Collector, Prometheus, Tempo, Loki and Grafana in one
+    # container, for development and demos only
+    image: grafana/otel-lgtm:0.37.0
+    profiles: [observability]            # only with --profile observability
+    ports:
+      - "127.0.0.1:3000:3000"            # Grafana, without login
+      - "127.0.0.1:4318:4318"            # OTLP over HTTP, also for ./start.sh
 
 volumes:
   www:

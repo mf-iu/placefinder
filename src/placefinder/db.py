@@ -4,7 +4,7 @@ The table places holds the 19 columns of a GeoNames dump, a generated column
 geom geography(Point, 4326) with a GiST index and trigram indexes on name and
 on all names (ALL_NAMES). t06-datenbank/load-cities.sh of the lab repositories
 creates and loads it, locally (service db in compose.yaml) or at a cloud
-provider.
+provider; from session 8 also placefinder-load or DATABASE_INIT (load.py).
 
 All values reach the server as parameters (%(name)s), separately from the SQL
 text. The f-strings below only combine fixed pieces of SQL, never input.
@@ -74,7 +74,8 @@ class PostgisRepository:
                 conn.execute("SELECT 'places'::regclass")
             except errors.UndefinedTable:
                 raise RuntimeError(
-                    "Table places not found. Load it with t06-datenbank/load-cities.sh."
+                    "Table places not found. Load it with t06-datenbank/load-cities.sh, "
+                    "placefinder-load or DATABASE_INIT=true."
                 ) from None
         self.pool.open(wait=True, timeout=30)
 
