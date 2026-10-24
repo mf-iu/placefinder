@@ -14,6 +14,12 @@ def test_health_reports_loaded_places(client: TestClient) -> None:
     assert response.json() == {"status": "ok", "places": 7}
 
 
+def test_livez_answers_without_the_data(client: TestClient) -> None:
+    response = client.get("/livez")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_about_contains_attribution(client: TestClient) -> None:
     body = client.get("/").json()
     assert body["name"] == "PlaceFinder"

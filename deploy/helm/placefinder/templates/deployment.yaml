@@ -31,7 +31,7 @@ spec:
           readinessProbe:
             httpGet: {path: /health, port: 8000}
             periodSeconds: 5
-          livenessProbe:
-            httpGet: {path: /health, port: 8000}
+          livenessProbe:            # process only, no database
+            httpGet: {path: /livez, port: 8000}
             periodSeconds: 10
             failureThreshold: 3

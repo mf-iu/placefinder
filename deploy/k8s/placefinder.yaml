@@ -30,7 +30,7 @@ spec:
             httpGet: {path: /health, port: 8000}
             periodSeconds: 5
           livenessProbe:            # restart if it hangs
-            httpGet: {path: /health, port: 8000}
+            httpGet: {path: /livez, port: 8000}   # process only, no database
             periodSeconds: 10
             failureThreshold: 3
 ---

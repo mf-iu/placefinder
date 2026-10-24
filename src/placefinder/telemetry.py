@@ -69,7 +69,7 @@ def setup(app: FastAPI) -> bool:
         app,
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
-        excluded_urls="health",
+        excluded_urls="health,livez",
         exclude_spans=["receive", "send"],
     )
     PsycopgInstrumentor().instrument(tracer_provider=tracer_provider, skip_dep_check=True)

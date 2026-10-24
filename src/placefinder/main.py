@@ -187,6 +187,14 @@ def health(
     return result
 
 
+@app.get("/livez")
+async def livez() -> dict[str, str]:
+    """Liveness check for Kubernetes: answers as long as the process serves
+    requests. Unlike /health it asks neither the database nor the cache, so an
+    outage there does not restart every pod at once."""
+    return {"status": "ok"}
+
+
 @app.get("/places", deprecated=True, tags=["v0"], responses=documented(422))
 def search_places(
     response: Response,

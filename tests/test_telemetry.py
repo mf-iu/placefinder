@@ -61,12 +61,17 @@ def test_spans_and_request_duration(monkeypatch: pytest.MonkeyPatch) -> None:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/livez")
+    def livez() -> dict[str, str]:
+        return {"status": "ok"}
+
     assert telemetry.setup(app) is True
     client = TestClient(app)
     client.get("/v1/places/2929670")
     client.get("/health")
+    client.get("/livez")
 
-    # one span per request, none for the health check
+    # one span per request, none for the health checks
     assert [s.name for s in spans.get_finished_spans()] == ["GET /v1/places/{place_id}"]
     span = spans.get_finished_spans()[0]
     assert span.resource.attributes["service.name"] == "placefinder"

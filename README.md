@@ -66,7 +66,8 @@ Die Werte hängen vom Stand der GeoNames-Daten ab. VS Code leitet den Port aus d
 |---|---|
 | `GET /v1/places` | Orte als GeoJSON-FeatureCollection, gefiltert und seitenweise (Abschnitt [REST-API v1](#rest-api-v1)) |
 | `GET /v1/places/{id}` | ein Ort als GeoJSON-Feature mit ETag; 404, wenn es ihn nicht gibt |
-| `GET /health` | Status und Zahl der geladenen Orte, z. B. für Health Checks |
+| `GET /health` | Status und Zahl der geladenen Orte; fragt Datenbank und Cache – für Health Checks und die Readiness Probe |
+| `GET /livez` | nur `{"status": "ok"}`, ohne Datenbank und Cache – für die Liveness Probe |
 | `GET /` | Name, Version und Quellenangabe der Daten |
 | `GET /docs`, `GET /openapi.json` | von FastAPI erzeugte Dokumentation (OpenAPI) |
 | `GET /places?q=…&limit=…`, `GET /places/{id}` | Version 0, veraltet: Liste einfacher JSON-Objekte. Die Antworten tragen die Header `Deprecation` und `Sunset` (01.01.2027) und verweisen mit `Link` auf `/v1/places`. |
@@ -505,6 +506,8 @@ curl "http://localhost:8000/v1/places?q=Erfurt"
 ```
 
 `port-forward` verbindet mit genau einem Pod. Wird dieser Pod ersetzt (Update, Löschen), bricht die Verbindung ab; dann den Befehl erneut starten.
+
+**Probes:** Die Readiness Probe fragt `/health`. Ist die Datenbank nicht erreichbar, bekommt der Pod keine Anfragen mehr, bleibt aber am Leben. Die Liveness Probe fragt `/livez`, das nur den Prozess prüft: Ein Ausfall der Datenbank soll nicht alle Pods gleichzeitig neu starten. Bis Tag `t08` fragten beide Probes `/health`.
 
 ### Neue Version ausrollen
 
