@@ -1,4 +1,5 @@
-{{/* Name of all objects of a release, e.g. pf-placefinder for release pf */}}
+{{/* Name of the objects of a release, e.g. pf-placefinder for release pf;
+     the ConfigMap adds -config */}}
 {{- define "placefinder.fullname" -}}
 {{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}

@@ -25,7 +25,7 @@ spec:
             - containerPort: 8000
           envFrom:
             - configMapRef:
-                name: {{ include "placefinder.fullname" . }}
+                name: {{ include "placefinder.fullname" . }}-config
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           readinessProbe:

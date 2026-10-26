@@ -22,7 +22,7 @@ spec:
           ports:
             - containerPort: 8000   # port of the application
           envFrom:                  # all keys of the ConfigMap as variables
-            - configMapRef: {name: placefinder}
+            - configMapRef: {name: placefinder-config}
           resources:
             requests: {cpu: 100m, memory: 128Mi}  # reserved for scheduling
             limits: {memory: 256Mi}               # killed above (OOMKilled)
@@ -48,7 +48,7 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: placefinder
+  name: placefinder-config
   labels: {app: placefinder}
 data:                               # plain settings, read at container start
   LOG_LEVEL: info

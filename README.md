@@ -523,7 +523,7 @@ git restore pyproject.toml uv.lock                  # Version im Repository wied
 
 ### Konfiguration ändern
 
-Die ConfigMap liefert `LOG_LEVEL` und `DATA_FILE` als Umgebungsvariablen. PlaceFinder liest sie nur beim Start, deshalb startet `rollout restart` die Pods neu:
+Die ConfigMap `placefinder-config` liefert `LOG_LEVEL` und `DATA_FILE` als Umgebungsvariablen. PlaceFinder liest sie nur beim Start, deshalb startet `rollout restart` die Pods neu:
 
 ```bash
 # in deploy/k8s/placefinder.yaml: LOG_LEVEL: debug
@@ -534,7 +534,7 @@ kubectl logs deployment/placefinder --follow       # nach einer Suche: "Search q
 
 ### Helm
 
-Das Chart erzeugt dieselben Objekte, benannt nach dem Release: Release `pf` → `pf-placefinder`. Es stört das Manifest aus `deploy/k8s/` deshalb nicht.
+Das Chart erzeugt dieselben Objekte, benannt nach dem Release: Release `pf` → `pf-placefinder`, die ConfigMap `pf-placefinder-config`. Es stört das Manifest aus `deploy/k8s/` deshalb nicht.
 
 ```bash
 helm lint deploy/helm/placefinder
