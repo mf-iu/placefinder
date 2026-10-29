@@ -20,7 +20,7 @@ from psycopg.conninfo import make_conninfo
 
 from placefinder.main import app
 
-# as t06-datenbank/schema.sql and indexes.sql of the lab repositories
+# as 06-postgis/schema.sql and indexes.sql of cloud-labs-local
 TABLE = """
 CREATE TABLE places (
     geonameid integer PRIMARY KEY, name text NOT NULL, asciiname text,

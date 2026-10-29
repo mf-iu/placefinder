@@ -2,7 +2,7 @@
 # Apply:   kubectl apply --filename deploy/k8s/
 # Remove:  kubectl delete --filename deploy/k8s/
 # The image placefinder:<version> is built locally and imported into the
-# k3d cluster (cloud-labs: t03-container/build-image.sh).
+# k3d cluster (cloud-labs-local: 03-kubernetes/load-image.sh).
 apiVersion: apps/v1
 kind: Deployment
 metadata:

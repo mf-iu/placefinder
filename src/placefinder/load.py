@@ -1,7 +1,7 @@
 """Create the table places in PostGIS and load a GeoNames file (from session 8).
 
-The same steps as t06-datenbank/load-cities.sh of the lab repositories, but in
-Python and inside the image: the image already contains the GeoNames file
+The same steps as 06-postgis/load-cities.sh of cloud-labs-local, but in Python
+and inside the image: the image already contains the GeoNames file
 (DATA_FILE). A service whose database sits in a private network, unreachable
 from the own computer, can therefore load its data itself:
 
@@ -32,7 +32,7 @@ from placefinder.db import describe
 
 logger = logging.getLogger("uvicorn.error")
 
-# as t06-datenbank/schema.sql of the lab repositories
+# as 06-postgis/schema.sql of cloud-labs-local
 SCHEMA = """
 CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -63,7 +63,8 @@ CREATE TABLE places (
 # \x01 never occurs in the data
 COPY = "COPY places FROM STDIN WITH (FORMAT csv, DELIMITER E'\\t', QUOTE E'\\x01')"
 
-# as t06-datenbank/indexes.sql; the last index must match ALL_NAMES in db.py
+# as 06-postgis/indexes.sql of cloud-labs-local; the last index must match
+# ALL_NAMES in db.py
 INDEXES = """
 ALTER TABLE places ADD COLUMN geom geography(Point, 4326)
   GENERATED ALWAYS AS (ST_MakePoint(longitude, latitude)::geography) STORED;

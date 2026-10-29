@@ -5,8 +5,9 @@
 # provenance, and sign it with cosign - without any stored secret.
 #
 # Images: ghcr.io/<owner>/placefinder:<commit sha> and :<branch or tag>,
-# e.g. :master or :t08. The deploy workflows of the lab repositories
-# (t08-iac/deploy.example.yml) roll out the image of a successful run.
+# e.g. :master or :t08. The deploy workflows of the provider repositories
+# (06-infrastructure-as-code/deploy.example.yml) roll out the image of a
+# successful run.
 #
 # Every action is pinned to the commit of a release: a tag like v7 can be
 # moved to other code later (as with trivy-action in March 2026), a commit

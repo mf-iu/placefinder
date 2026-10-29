@@ -14,10 +14,10 @@ Beispielanwendung des Kurses „Cloud Computing“: ein Dienst zur Ortssuche auf
 
 ## Einrichtung
 
-Voraussetzung ist der Dev Container eines Übungs-Repositorys (`cloud-labs-aws`, `cloud-labs-azure` oder `cloud-labs-gcp`, siehe dessen README). Ohne Dev Container genügt die Ubuntu-Shell in WSL: `start.sh` installiert [uv](https://docs.astral.sh/uv/) bei Bedarf, uv lädt ein passendes Python.
+Voraussetzung ist der Dev Container der Übungs-Repositories; die Einrichtung beschreibt [cloud-labs-local/00-setup](https://github.com/mf-iu/cloud-labs-local/tree/master/00-setup). Ohne Dev Container genügt die Ubuntu-Shell in WSL: `start.sh` installiert [uv](https://docs.astral.sh/uv/) bei Bedarf, uv lädt ein passendes Python.
 
 1. **Forken:** Das Repository auf GitHub forken; eigene Pipelines und das Abschlussprojekt laufen im Fork. Beim Forken **„Copy the master branch only“ abwählen** – sonst fehlen im Fork die Tags der Ausbaustufen, die die Übungen verwenden.
-2. **Klonen:** in Ubuntu (WSL) neben das Übungs-Repository:
+2. **Klonen:** in Ubuntu (WSL) neben `cloud-labs-local`:
    ```bash
    cd ~/kurs
    git clone https://github.com/<github-user>/placefinder.git
@@ -154,31 +154,26 @@ Im Browser http://localhost:5173 öffnen. Karte und API haben verschiedene Herk�
 
 Ab Tag `t07`. Mit `?tiles=<URL>` zeichnet die Karte ihre Basiskarte aus einer einzigen [PMTiles](https://docs.protomaps.com/pmtiles/)-Datei statt aus den Kacheln von OpenFreeMap. Die Datei liegt im Object Storage; einen Kachelserver braucht es nicht. Die Bibliothek `pmtiles` liest zuerst Kopf und Verzeichnis der Datei und dann jede Kachel mit einem HTTP-Range-Request (`Range: bytes=…`, Antwort `206 Partial Content`). Der Stil kommt von Protomaps (`@protomaps/basemaps`, Variante `light`, Beschriftung auf Deutsch).
 
-```bash
-cd /workspaces/cloud-labs-<anbieter>/t07-objektspeicher
-./make-tiles.sh                                      # Ausschnitt um Erfurt aus dem Protomaps-Build, wenige MB
-uv run local-s3.py upload ../.state/data/erfurt.pmtiles tiles/erfurt.pmtiles   # in SeaweedFS
-uv run local-s3.py map tiles/erfurt.pmtiles          # gibt die Adresse der Karte mit ?tiles=… aus
-```
+Kacheldatei schneiden, in den Object Storage laden und die Adresse der Karte erzeugen: [cloud-labs-local/07-cache-and-storage](https://github.com/mf-iu/cloud-labs-local/tree/master/07-cache-and-storage) (lokal mit SeaweedFS), Schritt `05-storage` im Anbieter-Repository (beim Anbieter).
 
-- **URL:** meist eine Pre-Signed URL – der Bucket bleibt privat, die URL gilt eine begrenzte Zeit. Als Parameter muss sie URL-kodiert sein; `local-s3.py map` und die Skripte für die Anbieter erledigen das.
+- **URL:** meist eine Pre-Signed URL – der Bucket bleibt privat, die URL gilt eine begrenzte Zeit. Als Parameter muss sie URL-kodiert sein; die Skripte der Übungen erledigen das.
 - **CORS:** Der Bucket muss Anfragen der Herkunft `http://localhost:5173` mit dem Header `Range` erlauben und `ETag` sowie `Content-Range` freigeben.
 - **Ausschnitt:** Die Karte zoomt beim Start auf die Bounding Box aus dem Kopf der Datei.
 - **Daten:** © OpenStreetMap-Mitwirkende (ODbL), Kacheln und Stil von Protomaps; die Karte nennt beides unten rechts.
 
 ## Datenbank
 
-Ab Tag `t06`. Musterlösung zu Termin 6: `src/placefinder/db.py` liest die Orte aus der Tabelle `places` in PostgreSQL mit PostGIS. Die Tabelle legt `load-cities.sh` aus dem Übungs-Repository an (`t06-datenbank`): die Spalten der GeoNames-Datei, die Spalte `geom` vom Typ `geography` mit GiST-Index und Trigramm-Indizes für die Namen.
+Ab Tag `t06`. Musterlösung zu Termin 6: `src/placefinder/db.py` liest die Orte aus der Tabelle `places` in PostgreSQL mit PostGIS. Die Tabelle legt `load-cities.sh` aus [cloud-labs-local/06-postgis](https://github.com/mf-iu/cloud-labs-local/tree/master/06-postgis) an: die Spalten der GeoNames-Datei, die Spalte `geom` vom Typ `geography` mit GiST-Index und Trigramm-Indizes für die Namen.
 
 ```bash
 cd /workspaces/placefinder
 docker compose up --detach db                          # PostGIS lokal, Port 5432 nur auf diesem Rechner
 export DATABASE_URL=postgresql://pf:pf@localhost:5432/pf
-../cloud-labs-<anbieter>/t06-datenbank/load-cities.sh  # Tabelle places mit cities15000
+../cloud-labs-local/06-postgis/load-cities.sh         # Tabelle places mit cities15000
 uv run fastapi dev src/placefinder/main.py             # meldet: Using PostGIS at localhost:5432/pf
 ```
 
-Dieselbe Variable mit der Verbindungszeichenkette aus `create-db.sh` verbindet PlaceFinder mit der Datenbank beim eigenen Anbieter; `t06-datenbank/test-api.sh` startet PlaceFinder so und prüft die API mit dem Smoke-Test aus Termin 5.
+Dieselbe Variable mit der Verbindungszeichenkette einer Datenbank beim Anbieter verbindet PlaceFinder mit dieser; `06-postgis/test-api.sh` in `cloud-labs-local` startet PlaceFinder so und prüft die API mit dem Smoke-Test.
 
 | Parameter | Abfrage in PostGIS | Index |
 |---|---|---|
@@ -254,9 +249,9 @@ Ab Tag `t08`. Musterlösung zu Termin 8: `.github/workflows/ci.yml` läuft bei j
 | `image` | Image bauen, mit Trivy scannen (bricht bei behebbaren Schwachstellen HIGH oder CRITICAL ab); auf `master` und bei Tags: in die GitHub Container Registry laden mit SBOM und Provenance, mit cosign signieren |
 
 - **Images:** `ghcr.io/<github-user>/placefinder:<commit>` und `:<branch oder tag>`, z. B. `:master` oder nach `git push origin t08` das Image `:t08`. Pull Requests werden gebaut und gescannt, aber nicht hochgeladen.
-- **Ohne gespeicherte Geheimnisse:** Das Hochladen erlaubt der `GITHUB_TOKEN` des Laufs (`packages: write`), das Signieren ein kurzlebiges Zertifikat von Sigstore für den OIDC-Token des Workflows (`id-token: write`). Ausrollen beim Anbieter: `t08-iac/deploy.example.yml` im Übungs-Repository, ebenfalls ohne gespeicherte Schlüssel.
+- **Ohne gespeicherte Geheimnisse:** Das Hochladen erlaubt der `GITHUB_TOKEN` des Laufs (`packages: write`), das Signieren ein kurzlebiges Zertifikat von Sigstore für den OIDC-Token des Workflows (`id-token: write`). Ausrollen beim Anbieter: `06-infrastructure-as-code/deploy.example.yml` im Anbieter-Repository, ebenfalls ohne gespeicherte Schlüssel.
 - **Gepinnte Actions:** Jede Action ist auf den Commit eines Releases festgelegt, nicht auf einen Tag wie `v7` – ein Tag lässt sich später auf anderen Code umhängen, so geschehen im März 2026 mit `trivy-action`. Dependabot (`.github/dependabot.yml`) schlägt wöchentlich neue Versionen der Actions, der Python-Pakete und der Basis-Images vor.
-- **Im eigenen Fork:** Unter *Actions* die Workflows einmal aktivieren. Ein neues Paket ist privat; für die Cloud-Dienste auf **Public** stellen (Abschnitt [Image in die GitHub Container Registry laden](#image-in-die-github-container-registry-laden)).
+- **Im eigenen Fork:** Unter *Actions* die Workflows einmal aktivieren. Ein neues Paket ist privat; für die Cloud-Dienste auf **Public** stellen (*Packages* → *placefinder* → *Package settings* → *Change visibility*). Schritt für Schritt: [cloud-labs-local/08-iac-and-operations](https://github.com/mf-iu/cloud-labs-local/tree/master/08-iac-and-operations).
 
 Signatur, SBOM und Provenance prüfen (im Dev Container, mit dem Digest aus der Zusammenfassung des Laufs):
 
@@ -285,21 +280,7 @@ for i in $(seq 300); do                                  # Last erzeugen
 done
 ```
 
-Grafana unter http://localhost:3000 öffnen (ohne Anmeldung): *Dashboards* → *RED Metrics (classic histogram)*, Auswahl `job` = `placefinder`. Unter *Explore* → *Tempo* die Traces einer Suche ansehen, unter *Explore* → *Prometheus* eigene Abfragen:
-
-```promql
-# Anteil der Anfragen ohne Serverfehler (SLI Verfügbarkeit), letzte 5 Minuten
-sum(rate(http_server_request_duration_seconds_count{http_response_status_code!~"5.."}[5m]))
-  / sum(rate(http_server_request_duration_seconds_count[5m]))
-# Anteil der Anfragen unter 250 ms (SLI Latenz)
-sum(rate(http_server_request_duration_seconds_bucket{le="0.25"}[5m]))
-  / sum(rate(http_server_request_duration_seconds_count[5m]))
-# Trefferquote des Caches
-sum(rate(placefinder_cache_lookups_total{cache_result="hit"}[5m]))
-  / sum(rate(placefinder_cache_lookups_total[5m]))
-```
-
-Fehler sichtbar machen: In `compose.yaml` `DATABASE_URL` und `DATABASE_INIT` einkommentieren, neu starten, dann `docker compose stop db` – die Suche antwortet mit `503`, die Fehlerrate im Dashboard steigt. Ohne Compose: `docker compose --profile observability up --detach lgtm` und PlaceFinder mit `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 ./start.sh` starten.
+Grafana unter http://localhost:3000 (ohne Anmeldung); Dashboards, Traces und Abfragen für SLIs: [cloud-labs-local/08-iac-and-operations](https://github.com/mf-iu/cloud-labs-local/tree/master/08-iac-and-operations#beobachtbarkeit-lokal).
 
 Weitere Einstellungen kommen aus den Standardvariablen des OpenTelemetry-SDK, z. B. `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` oder `OTEL_TRACES_SAMPLER`. Derselbe Code sendet so an jedes Backend, das OTLP versteht – auch an die Dienste der Cloud-Anbieter.
 
@@ -329,55 +310,11 @@ DATA_FILE=/pfad/zu/cities15000.txt .venv/bin/uvicorn placefinder.main:app --host
 
 ## Container
 
-Ab Tag `t02`. Alle Befehle im Terminal des Dev Containers, im Verzeichnis `/workspaces/placefinder`.
-
-**Zwei Docker-Instanzen:** Der Dev Container hat eine eigene Docker Engine (Docker in Docker). Images, die dort gebaut werden, sieht Docker in der Ubuntu-Shell von WSL nicht, und umgekehrt. Im Kurs laufen alle Container-Übungen im Dev Container. Auch eine Anmeldung bei Docker Hub gilt nur für die Instanz, in der sie ausgeführt wurde (siehe nächster Abschnitt).
-
-### Docker Hub: anmelden oder nicht?
-
-Die Images `python:3.14-slim` und `busybox` kommen von Docker Hub. Docker Hub begrenzt die Downloads (Pulls) innerhalb von 6 Stunden:
-
-| Zugriff | Pulls je 6 Stunden | gezählt je |
-|---|---|---|
-| ohne Anmeldung | 100 | öffentliche IP-Adresse (IPv4) bzw. IPv6-/64-Netz |
-| mit kostenlosem Docker-Konto | 200 | Konto |
-
-Ein Pull ist ein Image (ein Manifest), nicht jede Schicht; bei Images für mehrere Architekturen zählt jede geladene Architektur. Das aktuelle Limit steht unter [Docker Hub pull usage and limits](https://docs.docker.com/docker-hub/usage/pulls/).
-
-**Entscheidungshilfe:** Wer zu Hause über einen eigenen Anschluss arbeitet, kommt ohne Anmeldung aus. In einem Hochschul- oder Firmennetz teilen sich dagegen oft alle Rechner eine öffentliche IP-Adresse; dann zählen die Pulls aller zusammen, und das anonyme Limit ist schnell erreicht. Dort lohnt die Anmeldung.
-
-**Anmelden** (kostenloses Konto auf [hub.docker.com](https://hub.docker.com)), im Terminal des Dev Containers:
+Ab Tag `t02`. Übungen dazu – Image bauen, Schichten, Trivy und Syft, Compose, Hochladen nach ghcr.io, Docker Hub und seine Limits: [cloud-labs-local/02-container](https://github.com/mf-iu/cloud-labs-local/tree/master/02-container).
 
 ```bash
-docker login      # Bestätigung im Browser oder Benutzername und Zugangstoken
-docker logout     # Anmeldung wieder entfernen
-```
-
-Die Zugangsdaten speichert Docker unverschlüsselt in `~/.docker/config.json` des Containers. Wer Benutzername und Token eingibt, legt dafür auf Docker Hub ein Personal Access Token mit der Berechtigung *Public Repo Read-only* an, nicht das Passwort. Nach einem Neubau des Dev Containers ist die Anmeldung zu wiederholen; die Images selbst bleiben erhalten.
-
-**Fehler `toomanyrequests`:** Die Meldung beim Bauen oder Starten bedeutet, dass das Limit erreicht ist.
-
-- Anmelden und den Befehl wiederholen; ab dann zählt das eigene Kontingent.
-- Oder warten: Das Limit bezieht sich auf die letzten 6 Stunden, frühere Pulls fallen nach und nach heraus.
-- Bereits geladene Images bleiben in der Docker Engine des Dev Containers (`docker images`). Befehle, die ausdrücklich neu laden (`docker build --pull`, `docker compose pull`), bis dahin vermeiden.
-
-Wie viele Pulls noch übrig sind, zeigt eine Abfrage, die selbst nicht mitzählt (ohne Anmeldung: Kontingent der eigenen IP-Adresse):
-
-```bash
-token=$(curl --silent "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" | jq --raw-output .token)
-curl --silent --head --header "Authorization: Bearer $token" \
-  https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest | grep --ignore-case ratelimit
-```
-
-`ratelimit-limit: 100;w=21600` heißt 100 Pulls in 21600 Sekunden (6 Stunden), `ratelimit-remaining` ist der Rest. Fehlen diese Zeilen, gilt für die Adresse kein Limit.
-
-### Image bauen und starten
-
-```bash
-docker build --tag placefinder:0.8.0 .       # Image bauen (erster Build einige Minuten)
-docker history placefinder:0.8.0             # Schichten mit Größe
+docker build --tag placefinder:0.8.0 .
 docker run --rm --publish 8000:8000 placefinder:0.8.0
-curl "http://localhost:8000/v1/places?q=Erfurt"  # in einem zweiten Terminal
 ```
 
 Das `Dockerfile` hat drei Stufen:
@@ -390,103 +327,11 @@ Das `Dockerfile` hat drei Stufen:
 
 Die Daten gehören damit zum Image (rund 8 MB). So startet der Container überall ohne Download, auch auf den Serverless-Container-Diensten in Termin 3; aktuelle Daten gibt es mit einem neuen Build. Ab `t06` liest der Container die Orte stattdessen aus der Datenbank, wenn `DATABASE_URL` gesetzt ist; die Datei im Image bleibt dann ungenutzt. Eine andere Datei wählt `--build-arg GEONAMES_FILE=cities5000`. `.dockerignore` hält `.git`, `.venv`, `data/`, `tests/`, ab `t03` auch `deploy/` und ab `t05` `frontend/` aus dem Build-Kontext heraus.
 
-Ändert sich nur der Code unter `src/`, baut Docker nur die letzten Schichten neu; ändert sich `uv.lock`, auch die Abhängigkeiten.
-
-### Image verkleinern und prüfen
-
-Zum Vergleich ein Image mit nur einer Stufe auf Basis von `python:3.14` bauen (ohne Daten, nur für den Größenvergleich):
-
-```bash
-docker build --tag placefinder:single --file - . <<'EOF'
-FROM python:3.14
-COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /bin/uv
-WORKDIR /app
-COPY . .
-RUN uv sync --locked --no-dev
-CMD [".venv/bin/uvicorn", "placefinder.main:app", "--host", "0.0.0.0"]
-EOF
-docker images placefinder                                       # Größen vergleichen
-trivy image --severity HIGH,CRITICAL placefinder:0.8.0          # Schwachstellen
-trivy image --severity HIGH,CRITICAL placefinder:single
-```
-
-Fehlt `trivy` im Dev Container, geht es auch mit dem Image von Trivy:
-`docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image --severity HIGH,CRITICAL placefinder:0.8.0`
-(feste Version: Einige Trivy-Images vom März 2026 waren manipuliert, deshalb nie ohne Tag)
-
-### Trivy-Bericht lesen
-
-Trivy listet die Funde je Ziel: die Pakete des Betriebssystems (`debian`) und Python-Pakete (`python-pkg`). Wichtig sind die Spalten *Status* und *Fixed Version*:
-
-| Status | Bedeutung | Was tun? |
-|---|---|---|
-| `fixed` | Es gibt eine korrigierte Version (*Fixed Version*). | Paket bzw. Base-Image aktualisieren und neu bauen |
-| `affected` | Betroffen, aber noch keine Korrektur verfügbar. | abwarten; später mit `docker build --pull` neu bauen |
-| `fix_deferred` | Die Distribution hat die Korrektur zurückgestellt, meist wegen geringer Auswirkung. | prüfen, ob die Anwendung das Paket überhaupt nutzt |
-
-Bei PlaceFinder (Stand `t02`) sind alle Python-Pakete der virtuellen Umgebung ohne Befund. Die Funde im Debian-Teil des Base-Images (z. B. `util-linux`, `ncurses`, `systemd`) haben keine *Fixed Version*. PlaceFinder nutzt diese Programme nicht, und der Container läuft ohne root – die Funde sind vorhanden, aber praktisch nicht erreichbar.
-
-Die Python-Funde des Base-Images (`msgpack`, `urllib3`, `setuptools`) stammen aus pip, das diese Pakete in sich mitbringt. Im laufenden Container wird pip nicht gebraucht; die Runtime-Stufe entfernt es deshalb. Prüfen lässt sich die Herkunft eines Funds über den Pfad im JSON-Bericht:
-
-```bash
-trivy image --format json placefinder:0.8.0 \
-  | jq --raw-output '.Results[] | .Vulnerabilities[]? | "\(.PkgName) \(.InstalledVersion) \(.PkgPath // "-")"'
-```
-
-Nur Funde mit verfügbarer Korrektur zeigt `trivy image --ignore-unfixed …` – so wird in CI-Pipelines oft geprüft (Termin 8). Weniger Funde haben Base-Images mit weniger Paketen, etwa Distroless-Images.
-
-### Image in die GitHub Container Registry laden
-
-Optional in Termin 2, nötig ab Termin 3 (die Container-Dienste laden das Image von dort). Ab Termin 3 erledigt das `t03-container/build-image.sh --push` im Übungs-Repository, ab Termin 8 die [Pipeline](#pipeline); von Hand:
-
-```bash
-gh auth login                                 # einmalig, falls noch nicht angemeldet
-gh auth refresh --scopes write:packages       # Recht zum Hochladen von Paketen
-gh auth token | docker login ghcr.io --username <github-user> --password-stdin
-docker tag placefinder:0.8.0 ghcr.io/<github-user>/placefinder:t08
-docker push ghcr.io/<github-user>/placefinder:t08
-```
-
-Ein neues Paket ist zunächst privat. Für Termin 3 auf GitHub unter *Packages* → *placefinder* → *Package settings* → *Change visibility* auf **Public** stellen.
-
-### Compose: zwei Dienste
-
-`compose.yaml` startet zwei Dienste: PlaceFinder (`api`) und `web`, einen winzigen Webserver aus dem offiziellen Image `busybox` (rund 2 MB). Ab `t06` kommt als dritter Dienst die Datenbank `db` dazu (Abschnitt [Datenbank](#datenbank)), ab `t07` der Cache `valkey` und der Object Storage `seaweedfs` mit S3-API auf Port 8333 (Abschnitte [Cache](#cache) und [Eigene Kacheln](#eigene-kacheln-pmtiles)).
-
-> **Warum ein zweiter Dienst, der nichts mit PlaceFinder zu tun hat?**
-> Mit nur einem Dienst wäre `compose.yaml` ein längerer `docker run`-Befehl. Erst mit zwei Diensten zeigt sich, was Compose leistet:
-> ein gemeinsames Netz, in dem der Dienstname zugleich der Hostname ist; eine Startreihenfolge mit Healthcheck; ein benanntes Volume, das Daten über `docker compose down` hinaus hält.
-> `web` ist dafür bewusst klein und unabhängig – PlaceFinder ruft ihn nicht auf. Eine Datenbank bekommt PlaceFinder erst in Termin 6: PostgreSQL mit PostGIS, dann als weiterer Dienst in dieser `compose.yaml`.
-
-```bash
-cd /workspaces/placefinder                    # compose.yaml liegt hier
-docker ps                                     # läuft noch ein Container auf Port 8000? stoppen
-docker compose up --detach                    # bauen (falls nötig) und starten
-docker compose ps                             # web: healthy, api: running (ab t06 auch db, ab t07 valkey, seaweedfs)
-curl http://localhost:8080/                   # Startseite von web, liegt im Volume
-docker compose exec api python -c "import urllib.request; print(urllib.request.urlopen('http://web:8080/').read().decode())"
-docker compose exec web sh -c 'echo "Changed" > /www/index.html'
-docker compose down                           # Container und Netz weg, das Volume www bleibt
-docker compose up --detach
-curl http://localhost:8080/                   # zeigt weiter "Changed"
-docker compose down --volumes                 # zusätzlich das Volume löschen
-```
-
-- **Netz:** Der Aufruf aus `api` erreicht `web` über den Dienstnamen als Hostnamen (`http://web:8080/`); Port 8080 auf dem Rechner braucht er dafür nicht.
-- **Reihenfolge:** `api` startet erst, wenn `web` den Healthcheck besteht (`wget` auf die Startseite), ab `t06` auch `db` (`pg_isready`), ab `t07` auch `valkey` (`valkey-cli ping`).
-- **Volume:** `web` legt die Startseite beim ersten Start im Volume `www` an. Änderungen überstehen `docker compose down`; erst `down --volumes` löscht sie.
-
-Häufige Fehler:
-
-| Meldung | Ursache | Abhilfe |
-|---|---|---|
-| `no configuration file provided: not found` | Das Terminal steht nicht im Verzeichnis mit `compose.yaml` (neue Terminals öffnen im Übungs-Repository). | `cd /workspaces/placefinder` |
-| `Bind for 0.0.0.0:8000 failed: port is already allocated` | Ein anderer Container belegt Port 8000, meist der aus `docker run` der Übung. | `docker ps`, den Container mit `docker stop <name>` beenden, dann `docker compose up --detach` |
-| `Temporary failure in name resolution` beim Aufruf von `web` | Der Container `api` hat nach einem fehlgeschlagenen Start kein vollständiges Netz. | `docker compose down`, dann `docker compose up --detach` |
+`compose.yaml` startet PlaceFinder (`api`) mit einem kleinen Übungsdienst `web`, ab `t06` mit der Datenbank `db`, ab `t07` mit dem Cache `valkey` und dem Object Storage `seaweedfs`, ab `t08` auf Wunsch mit dem Backend für Telemetrie `lgtm` (Profil `observability`).
 
 ## Kubernetes
 
-Ab Tag `t03`. Der Cluster läuft lokal mit k3d im Dev Container. Anlegen, Image bauen und Löschen übernehmen Skripte im Übungs-Repository unter `t03-container`: `cluster-up.sh`, `build-image.sh` und `cluster-down.sh` (Anleitung im README dort).
+Ab Tag `t03`. Cluster anlegen, Manifest anwenden, neue Version ausrollen, Konfiguration ändern, Helm und Autoscaler: [cloud-labs-local/03-kubernetes](https://github.com/mf-iu/cloud-labs-local/tree/master/03-kubernetes); HTTPS mit der Gateway API: [cloud-labs-local/04-cluster-network](https://github.com/mf-iu/cloud-labs-local/tree/master/04-cluster-network).
 
 | Datei | Inhalt |
 |---|---|
@@ -495,69 +340,7 @@ Ab Tag `t03`. Der Cluster läuft lokal mit k3d im Dev Container. Anlegen, Image 
 | `deploy/helm/placefinder/` | Helm-Chart mit denselben drei Objekten |
 | `deploy/helm/values-dev.yaml`, `values-prod.yaml` | Werte je Umgebung für das Chart |
 
-### Manifest anwenden
-
-```bash
-cd /workspaces/placefinder
-kubectl apply --filename deploy/k8s/
-kubectl get pods --output wide                 # drei Pods, verteilt auf die Nodes
-kubectl port-forward svc/placefinder 8000:80   # läuft weiter; zweites Terminal öffnen
-curl "http://localhost:8000/v1/places?q=Erfurt"
-```
-
-`port-forward` verbindet mit genau einem Pod. Wird dieser Pod ersetzt (Update, Löschen), bricht die Verbindung ab; dann den Befehl erneut starten.
-
 **Probes:** Die Readiness Probe fragt `/health`. Ist die Datenbank nicht erreichbar, bekommt der Pod keine Anfragen mehr, bleibt aber am Leben. Die Liveness Probe fragt `/livez`, das nur den Prozess prüft: Ein Ausfall der Datenbank soll nicht alle Pods gleichzeitig neu starten. Bis Tag `t08` fragten beide Probes `/health`.
-
-### Neue Version ausrollen
-
-```bash
-uv version 0.8.1 --no-sync                          # Version in pyproject.toml und uv.lock
-../cloud-labs-<anbieter>/t03-container/build-image.sh   # baut placefinder:0.8.1, lädt es in den Cluster
-kubectl set image deployment/placefinder api=placefinder:0.8.1
-kubectl rollout status deployment/placefinder
-curl http://localhost:8000/                         # "version": "0.8.1"
-kubectl rollout undo deployment/placefinder         # zurück zu 0.8.0
-git restore pyproject.toml uv.lock                  # Version im Repository wieder 0.8.0
-```
-
-### Konfiguration ändern
-
-Die ConfigMap `placefinder-config` liefert `LOG_LEVEL` und `DATA_FILE` als Umgebungsvariablen. PlaceFinder liest sie nur beim Start, deshalb startet `rollout restart` die Pods neu:
-
-```bash
-# in deploy/k8s/placefinder.yaml: LOG_LEVEL: debug
-kubectl apply --filename deploy/k8s/
-kubectl rollout restart deployment/placefinder
-kubectl logs deployment/placefinder --follow       # nach einer Suche: "Search q=Erfurt: …"
-```
-
-### Helm
-
-Das Chart erzeugt dieselben Objekte, benannt nach dem Release: Release `pf` → `pf-placefinder`, die ConfigMap `pf-placefinder-config`. Es stört das Manifest aus `deploy/k8s/` deshalb nicht.
-
-```bash
-helm lint deploy/helm/placefinder
-helm template pf deploy/helm/placefinder --values deploy/helm/values-dev.yaml   # nur anzeigen
-helm upgrade --install pf deploy/helm/placefinder --values deploy/helm/values-dev.yaml
-helm upgrade --install pf deploy/helm/placefinder --values deploy/helm/values-prod.yaml
-helm history pf                                     # zwei Revisionen
-helm rollback pf 1                                  # zurück zu den dev-Werten
-helm uninstall pf
-```
-
-Die Annotation `checksum/config` im Deployment ändert sich mit der ConfigMap; deshalb startet `helm upgrade` die Pods neu, wenn sich nur die Konfiguration ändert. Mit `--set image.repository=ghcr.io/<github-user>/placefinder` laden die Nodes das Image aus der GitHub Container Registry statt des importierten.
-
-### Autoscaler (Zusatz)
-
-```bash
-kubectl apply --filename deploy/hpa.yaml
-kubectl get hpa --watch                             # zweites Terminal
-kubectl run load --rm --stdin --tty --image=busybox:1.37 -- \
-  sh -c 'while true; do wget --quiet --output-document /dev/null "http://placefinder/v1/places?q=B"; done'
-```
-
-Mit Last steigt die Zahl der Replikate auf bis zu sechs; nach dem Ende der Last (Ctrl+C) sinkt sie nach etwa fünf Minuten wieder auf zwei. Achtung: Ein erneutes `kubectl apply --filename deploy/k8s/` setzt die Replikate zunächst auf drei zurück, danach regelt der HPA wieder. Entfernen: `kubectl delete --filename deploy/hpa.yaml`.
 
 ## Entwicklung
 

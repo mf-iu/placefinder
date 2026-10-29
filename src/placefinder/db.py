@@ -2,9 +2,10 @@
 
 The table places holds the 19 columns of a GeoNames dump, a generated column
 geom geography(Point, 4326) with a GiST index and trigram indexes on name and
-on all names (ALL_NAMES). t06-datenbank/load-cities.sh of the lab repositories
-creates and loads it, locally (service db in compose.yaml) or at a cloud
-provider; from session 8 also placefinder-load or DATABASE_INIT (load.py).
+on all names (ALL_NAMES). 06-postgis/load-cities.sh of cloud-labs-local creates
+and loads it, locally (service db in compose.yaml) or, through
+05-storage/with-db.sh of a provider repository, at a cloud provider; from
+session 8 also placefinder-load or DATABASE_INIT (load.py).
 
 All values reach the server as parameters (%(name)s), separately from the SQL
 text. The f-strings below only combine fixed pieces of SQL, never input.
@@ -27,7 +28,8 @@ COLUMNS = """geonameid, name, latitude, longitude, country_code,
 # all names of a place in lower case, each followed by a comma, e.g.
 # ",erfurt,erfurt,erf,erfordia,ehrfurt,". A name starts with q if this text
 # is LIKE '%,q%'. The expression is the same as in the index
-# places_all_names_trgm_idx (t06-datenbank/indexes.sql), so the search uses it.
+# places_all_names_trgm_idx (06-postgis/indexes.sql of cloud-labs-local), so
+# the search uses it.
 ALL_NAMES = (
     "(',' || lower(name) || ',' || lower(coalesce(asciiname, '')) || ','"
     " || lower(coalesce(alternatenames, '')) || ',')"
@@ -74,7 +76,8 @@ class PostgisRepository:
                 conn.execute("SELECT 'places'::regclass")
             except errors.UndefinedTable:
                 raise RuntimeError(
-                    "Table places not found. Load it with t06-datenbank/load-cities.sh, "
+                    "Table places not found. Load it with "
+                    "cloud-labs-local/06-postgis/load-cities.sh, "
                     "placefinder-load or DATABASE_INIT=true."
                 ) from None
         self.pool.open(wait=True, timeout=30)

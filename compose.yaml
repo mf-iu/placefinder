@@ -2,8 +2,8 @@
 # to practise Compose. web is a tiny web server (BusyBox httpd, about 2 MB)
 # that has nothing to do with PlaceFinder. It shows what Compose adds to
 # docker run: a shared network with service names, a start order with health
-# check and a named volume. db is PostgreSQL with PostGIS (from session 6); the
-# lab script t06-datenbank/load-cities.sh loads the places into it. valkey
+# check and a named volume. db is PostgreSQL with PostGIS (from session 6);
+# 06-postgis/load-cities.sh of cloud-labs-local loads the places into it. valkey
 # caches searches, seaweedfs is object storage with the S3 API for raw data and
 # map tiles (both from session 7). lgtm receives traces and metrics and shows
 # them in Grafana (from session 8); it only starts with the profile
