@@ -1,4 +1,5 @@
-"""Geometry helpers: bounding boxes and distances on the sphere (WGS 84)."""
+"""Geometry helpers: bounding boxes and distances on the sphere (World Geodetic
+System 1984, WGS 84)."""
 
 from math import asin, cos, radians, sin, sqrt
 from typing import NamedTuple
@@ -7,7 +8,8 @@ EARTH_RADIUS_M = 6_371_008.8  # mean radius of the earth in meters
 
 
 class BBox(NamedTuple):
-    """Bounding box in the order of GeoJSON and OGC API: lon, lat, lon, lat."""
+    """Bounding box in the order of GeoJSON and Open Geospatial Consortium
+    (OGC) API: lon, lat, lon, lat."""
 
     min_lon: float
     min_lat: float

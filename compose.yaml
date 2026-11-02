@@ -4,10 +4,10 @@
 # docker run: a shared network with service names, a start order with health
 # check and a named volume. db is PostgreSQL with PostGIS (from session 6);
 # 06-postgis/load-cities.sh of cloud-labs-local loads the places into it. valkey
-# caches searches, seaweedfs is object storage with the S3 API for raw data and
-# map tiles (both from session 7). lgtm receives traces and metrics and shows
-# them in Grafana (from session 8); it only starts with the profile
-# observability, see the README, section Beobachtbarkeit.
+# caches searches, seaweedfs is object storage with the Simple Storage Service
+# (S3) API for raw data and map tiles (both from session 7). lgtm receives
+# traces and metrics and shows them in Grafana (from session 8); it only starts
+# with the profile observability, see the README, section Beobachtbarkeit.
 # Start: docker compose up --detach   Stop: docker compose down (--volumes also deletes the volumes)
 services:
   api:
@@ -90,7 +90,8 @@ services:
     profiles: [observability]            # only with --profile observability
     ports:
       - "127.0.0.1:3000:3000"            # Grafana, without login
-      - "127.0.0.1:4318:4318"            # OTLP over HTTP, also for ./start.sh
+      # OpenTelemetry Protocol (OTLP) over HTTP, also for ./start.sh
+      - "127.0.0.1:4318:4318"
 
 volumes:
   www:

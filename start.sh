@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Start PlaceFinder locally: in the Ubuntu shell of WSL or in the dev
-# container of a cloud-labs repository. Installs uv if needed (after asking),
-# downloads the GeoNames data if it is missing and starts the server.
+# Start PlaceFinder locally: in the Ubuntu shell of Windows Subsystem for Linux
+# (WSL) or in the dev container of a cloud-labs repository. Installs uv if
+# needed (after asking), downloads the GeoNames data if it is missing and starts
+# the server.
 #
 # Usage: ./start.sh [options]
 #   --data NAME   GeoNames dump, e.g. cities5000 or DE (default: cities15000)
@@ -52,7 +53,7 @@ if ! command -v uv >/dev/null 2>&1; then
   curl --location --silent --show-error --fail https://astral.sh/uv/install.sh | sh
 fi
 
-# GeoNames data (CC BY 4.0)
+# GeoNames data (Creative Commons Attribution, CC BY 4.0)
 if [[ -z "${DATA_FILE:-}" ]]; then
   export DATA_FILE="data/$data.txt"
   [[ -s "$DATA_FILE" ]] || data/download.sh "$data"

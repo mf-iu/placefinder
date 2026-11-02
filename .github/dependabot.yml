@@ -1,6 +1,7 @@
 # Dependabot opens pull requests for new versions (from session 8): the
 # pinned actions of the workflows, the Python packages in uv.lock and the
-# base images of the Dockerfile. The CI pipeline tests each of them.
+# base images of the Dockerfile. The Continuous Integration (CI) pipeline tests
+# each of them.
 version: 2
 updates:
   - package-ecosystem: github-actions

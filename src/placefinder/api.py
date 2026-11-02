@@ -1,5 +1,6 @@
 """REST API version 1: places as GeoJSON (RFC 7946) with filters, cursor
-pagination, caching headers and ETags. Errors are problem details (RFC 9457).
+pagination, caching headers and Entity Tags (ETags). Errors are problem details
+(RFC 9457).
 Searches go through the cache in Valkey if there is one (cache.py, from
 session 7); the header Cache-Status (RFC 9211) tells whether it answered.
 """

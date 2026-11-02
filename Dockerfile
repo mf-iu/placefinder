@@ -6,7 +6,7 @@
 # GeoNames dump that is baked into the image, e.g. cities5000 or DE
 ARG GEONAMES_FILE=cities15000
 
-# ---- Stage 1: download the GeoNames data (CC BY 4.0) ----
+# ---- Stage 1: GeoNames data (Creative Commons Attribution, CC BY 4.0) ----
 FROM python:3.14-slim AS data
 ARG GEONAMES_FILE
 WORKDIR /data
@@ -47,5 +47,5 @@ ENV PATH=/app/.venv/bin:$PATH
 USER app
 # document the port; publish it with docker run --publish
 EXPOSE 8000
-# exec form: uvicorn runs as PID 1 and receives signals
+# exec form: uvicorn runs as Process ID (PID) 1 and receives signals
 CMD ["/app/.venv/bin/uvicorn", "placefinder.main:app", "--host", "0.0.0.0", "--port", "8000"]

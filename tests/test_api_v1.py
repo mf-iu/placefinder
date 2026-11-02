@@ -1,5 +1,5 @@
 """Tests of the REST API version 1 (/v1): GeoJSON, filters, pagination,
-caching headers, ETags and problem details."""
+caching headers, Entity Tags (ETags) and problem details."""
 
 import pytest
 from fastapi.testclient import TestClient

@@ -16,9 +16,9 @@ Sort = Literal["relevance", "-population", "name", "distance"]
 
 @dataclass(frozen=True, slots=True)
 class Place:
-    """A place: GeoNames id, name, WGS 84 coordinates in degrees, ISO country
-    code, population, GeoNames feature code (e.g. PPLC for a capital) and
-    time zone."""
+    """A place: GeoNames id, name, World Geodetic System 1984 (WGS 84)
+    coordinates in degrees, ISO country code, population, GeoNames feature code
+    (e.g. PPLC for a capital) and time zone."""
 
     id: int
     name: str

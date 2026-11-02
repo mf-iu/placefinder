@@ -2,7 +2,7 @@
 
 Telemetry is off unless OTEL_EXPORTER_OTLP_ENDPOINT is set, e.g. to the
 OpenTelemetry backend of compose.yaml: http://lgtm:4318. PlaceFinder then
-sends both signals with OTLP over HTTP:
+sends both signals with OpenTelemetry Protocol (OTLP) over HTTP:
 
 - Traces: one span per request (FastAPI) with a child span per SQL statement
   (psycopg), so a slow search shows where the time goes.
@@ -12,8 +12,9 @@ sends both signals with OTLP over HTTP:
   follow from it - and the cache lookups by result (cache.py).
 
 All further settings come from the standard OTEL_* environment variables of
-the SDK, e.g. OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES,
-OTEL_METRIC_EXPORT_INTERVAL (milliseconds, default 60000) or
+the Software Development Kit (SDK), e.g. OTEL_SERVICE_NAME,
+OTEL_RESOURCE_ATTRIBUTES, OTEL_METRIC_EXPORT_INTERVAL (milliseconds, default
+60000) or
 OTEL_TRACES_SAMPLER. The same code therefore sends to any backend that speaks
 OTLP: Jaeger, Prometheus, Grafana, or the services of the cloud providers.
 """

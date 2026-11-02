@@ -3,7 +3,8 @@
 # Usage: data/download.sh [name]
 #   name: cities15000 (default), cities5000, cities1000, DE, allCountries ...
 #   (list: https://download.geonames.org/export/dump/)
-# GeoNames data is licensed under CC BY 4.0: https://www.geonames.org
+# GeoNames data is licensed under Creative Commons Attribution (CC BY) 4.0:
+# https://www.geonames.org
 set -o errexit -o nounset -o pipefail
 
 name="${1:-cities15000}"

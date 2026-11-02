@@ -6,7 +6,8 @@
   Start (dev container, second terminal):
     python3 -m http.server 5173 --directory frontend
   then open http://localhost:5173. The API runs on port 8000 and allows
-  this origin via CORS (CORS_ORIGINS). Another API: ?api=https://...
+  this origin via Cross-Origin Resource Sharing (CORS, variable CORS_ORIGINS).
+  Another API: ?api=https://...
 
   Base map: by default the vector tiles of OpenFreeMap. With ?tiles=<URL of a
   PMTiles file> (from session 7) the map reads its own tiles from one file in
@@ -37,7 +38,8 @@
   <div id="map"></div>
   <div id="status">Lade …</div>
   <script type="module">
-    // version 6 is an ES module only; pinned version, as everything in the course
+    // version 6 is an ECMAScript (ES) module only; pinned version, as everything
+    // in the course
     import * as maplibregl from "https://unpkg.com/maplibre-gl@6.14.0/dist/maplibre-gl.mjs";
 
     const params = new URLSearchParams(location.search);
@@ -152,7 +154,8 @@
       const place = event.features[0];
       const p = place.properties;
       // build the popup from text nodes, never from HTML: the data come from an
-      // API, and names could contain markup (OWASP API10)
+      // API, and names could contain markup (Open Worldwide Application Security
+      // Project, OWASP API10)
       const content = document.createElement("div");
       const name = document.createElement("b");
       name.textContent = p.name;

@@ -1,8 +1,8 @@
 """PlaceFinder API: search places of GeoNames, in memory or in PostGIS.
 
 Version 1 under /v1 (from session 5): GeoJSON, filters, cursor pagination,
-ETags and errors as problem details. The unversioned endpoints of stage v0
-(/places) remain for a while and are marked as deprecated.
+Entity Tags (ETags) and errors as problem details. The unversioned endpoints of
+stage v0 (/places) remain for a while and are marked as deprecated.
 
 With DATABASE_URL set, the places come from PostgreSQL with PostGIS (from
 session 6, db.py); otherwise PlaceFinder loads the GeoNames file DATA_FILE
@@ -151,7 +151,8 @@ async def database_unavailable(request: Request, exc: Exception) -> JSONResponse
 
 
 app.include_router(create_router())
-# CORS: web pages of these origins may read the responses in the browser
+# Cross-Origin Resource Sharing (CORS): web pages of these origins may read the
+# responses in the browser
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o for o in os.environ.get("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",") if o],

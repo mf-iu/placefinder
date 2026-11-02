@@ -1,11 +1,11 @@
 """Places in PostgreSQL with PostGIS (from session 6).
 
 The table places holds the 19 columns of a GeoNames dump, a generated column
-geom geography(Point, 4326) with a GiST index and trigram indexes on name and
-on all names (ALL_NAMES). 06-postgis/load-cities.sh of cloud-labs-local creates
-and loads it, locally (service db in compose.yaml) or, through
-05-storage/with-db.sh of a provider repository, at a cloud provider; from
-session 8 also placefinder-load or DATABASE_INIT (load.py).
+geom geography(Point, 4326) with a Generalized Search Tree (GiST) index and
+trigram indexes on name and on all names (ALL_NAMES). 06-postgis/load-cities.sh
+of cloud-labs-local creates and loads it, locally (service db in compose.yaml)
+or, through 05-storage/with-db.sh of a provider repository, at a cloud
+provider; from session 8 also placefinder-load or DATABASE_INIT (load.py).
 
 All values reach the server as parameters (%(name)s), separately from the SQL
 text. The f-strings below only combine fixed pieces of SQL, never input.

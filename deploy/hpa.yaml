@@ -1,6 +1,7 @@
-# Horizontal Pod Autoscaler for PlaceFinder (extra task of session 3).
-# Needs the Deployment from deploy/k8s/ and a CPU request; k3s contains the
-# metrics server. Apply:  kubectl apply --filename deploy/hpa.yaml
+# Horizontal Pod Autoscaler (HPA) for PlaceFinder (extra task of session 3).
+# Needs the Deployment from deploy/k8s/ and a CPU request;
+# k3s contains the metrics server.
+# Apply:  kubectl apply --filename deploy/hpa.yaml
 # Watch:  kubectl get hpa --watch
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
