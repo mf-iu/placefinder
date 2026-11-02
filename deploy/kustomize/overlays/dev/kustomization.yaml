@@ -1,0 +1,25 @@
+# Development overlay: namespace placefinder-dev, one pod, every search in the
+# log.
+# Show:    kubectl kustomize deploy/kustomize/overlays/dev
+# Apply:   kubectl apply --kustomize deploy/kustomize/overlays/dev
+# Remove:  kubectl delete --kustomize deploy/kustomize/overlays/dev
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# All objects of the base go into this namespace. The names stay the same, so
+# the overlays do not get in each other's way or in the way of deploy/k8s/.
+namespace: placefinder-dev
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+replicas:
+  - name: placefinder
+    count: 1
+
+configMapGenerator:
+  - name: placefinder-config
+    behavior: merge                 # change one key, keep the others
+    literals:
+      - LOG_LEVEL=debug

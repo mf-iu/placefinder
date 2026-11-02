@@ -1,0 +1,33 @@
+# Deployment of the Kustomize base, the same as in deploy/k8s/placefinder.yaml:
+# change both together. The ConfigMap comes from the configMapGenerator in
+# kustomization.yaml; kustomize adds the hash to the name in configMapRef.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: placefinder
+  labels: {app: placefinder}
+spec:
+  replicas: 3                       # desired number of pods; overlays change it
+  selector:                         # which pods belong to the deployment
+    matchLabels: {app: placefinder}
+  template:                         # blueprint of each pod
+    metadata:
+      labels: {app: placefinder}    # must match the selector
+    spec:
+      containers:
+        - name: api
+          image: placefinder:0.8.0  # fixed version tag, never latest
+          ports:
+            - containerPort: 8000   # port of the application
+          envFrom:                  # all keys of the ConfigMap as variables
+            - configMapRef: {name: placefinder-config}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}  # reserved for scheduling
+            limits: {memory: 256Mi}               # killed above (OOMKilled)
+          readinessProbe:           # requests only when ready
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 5
+          livenessProbe:            # restart if it hangs
+            httpGet: {path: /livez, port: 8000}   # process only, no database
+            periodSeconds: 10
+            failureThreshold: 3

@@ -339,6 +339,7 @@ Ab Tag `t03`. Cluster anlegen, Manifest anwenden, neue Version ausrollen, Konfig
 | `deploy/hpa.yaml` | Horizontal Pod Autoscaler (Zusatzaufgabe) |
 | `deploy/helm/placefinder/` | Helm-Chart mit denselben drei Objekten, erklärt in [`deploy/helm/README.md`](deploy/helm/README.md) |
 | `deploy/helm/values-dev.yaml`, `values-prod.yaml` | Werte je Umgebung für das Chart |
+| `deploy/kustomize/` | dieselben drei Objekte mit Kustomize: Basis und Overlays `dev` und `prod`, erklärt in [`deploy/kustomize/README.md`](deploy/kustomize/README.md) (neu, nicht in den Tags `t01` bis `t08`) |
 
 **Probes:** Die Readiness Probe fragt `/health`. Ist die Datenbank nicht erreichbar, bekommt der Pod keine Anfragen mehr, bleibt aber am Leben. Die Liveness Probe fragt `/livez`, das nur den Prozess prüft: Ein Ausfall der Datenbank soll nicht alle Pods gleichzeitig neu starten. Bis Tag `t08` fragten beide Probes `/health`.
 
@@ -358,6 +359,7 @@ compose.yaml                # PlaceFinder, a small practice service (from t02), 
 deploy/k8s/                 # Kubernetes manifests (from t03)
 deploy/hpa.yaml             # Horizontal Pod Autoscaler (from t03)
 deploy/helm/                # Helm chart and values per environment (from t03)
+deploy/kustomize/           # the same objects with Kustomize: base and overlays (after t08)
 src/placefinder/main.py     # FastAPI app: loading the data at startup, CORS, v0 endpoints
 src/placefinder/api.py      # REST API v1: GeoJSON, filters, cursor pagination, ETags (from t05)
 src/placefinder/problems.py # errors as problem details, RFC 9457 (from t05)

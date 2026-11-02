@@ -1,6 +1,6 @@
 # Helm-Chart für PlaceFinder
 
-Das Chart beschreibt dieselben drei Objekte wie das Manifest [`deploy/k8s/placefinder.yaml`](../k8s/placefinder.yaml) – Deployment, Service und ConfigMap –, aber als Vorlagen mit Werten. Statt die YAML-Datei für jede Umgebung zu kopieren, setzt man nur andere Werte ein: ein Pod und ausführliche Logs zum Entwickeln, drei Pods und knappe Logs für den Betrieb. Helm merkt sich jede Installation als Revision und kann zu einer früheren zurückkehren.
+Das Chart beschreibt dieselben drei Objekte wie das Manifest [`deploy/k8s/placefinder.yaml`](../k8s/placefinder.yaml) – Deployment, Service und ConfigMap –, aber als Vorlagen mit Werten. Statt die YAML-Datei für jede Umgebung zu kopieren, setzt man nur andere Werte ein: ein Pod und ausführliche Logs zum Entwickeln, drei Pods und knappe Logs für den Betrieb. Helm merkt sich jede Installation als Revision und kann zu einer früheren zurückkehren. Dieselbe Aufgabe löst [`deploy/kustomize/`](../kustomize/README.md) mit Kustomize; dort steht auch ein Vergleich der beiden.
 
 **Übung:** [cloud-labs-local/03-kubernetes](https://github.com/mf-iu/cloud-labs-local/tree/master/03-kubernetes), Abschnitt „Helm“ (Termin 3) · **Stand:** Chart 0.5.0 für PlaceFinder 0.8.0 (Tag `t08`) · **Voraussetzung:** Cluster `pf` aus `cluster-up.sh` und das Image aus `load-image.sh`
 

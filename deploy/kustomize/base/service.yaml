@@ -1,0 +1,11 @@
+# Service of the Kustomize base, the same as in deploy/k8s/placefinder.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: placefinder                 # DNS name inside the namespace
+  labels: {app: placefinder}
+spec:
+  selector: {app: placefinder}      # target pods
+  ports:
+    - port: 80                      # port of the service
+      targetPort: 8000              # port of the container

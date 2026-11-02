@@ -1,0 +1,6 @@
+# Namespace of the prod overlay; deleting the overlay deletes it with all
+# objects in it
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: placefinder-prod

@@ -1,0 +1,23 @@
+# Base of the Kustomize variant: the objects of deploy/k8s/placefinder.yaml as
+# plain YAML. The overlays dev and prod change only what differs.
+# Show the result:  kubectl kustomize deploy/kustomize/base
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - service.yaml
+
+# The ConfigMap is generated: its name gets a hash of its content
+# (placefinder-config-<hash>), and kustomize changes the reference in the
+# Deployment to match. Changed settings mean a new name, so the pods restart.
+configMapGenerator:
+  - name: placefinder-config
+    literals:
+      - LOG_LEVEL=info
+      - DATA_FILE=/data/cities15000.txt
+
+# Added to the metadata of every object, not to the selectors
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: kustomize
