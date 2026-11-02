@@ -337,7 +337,7 @@ Ab Tag `t03`. Cluster anlegen, Manifest anwenden, neue Version ausrollen, Konfig
 |---|---|
 | `deploy/k8s/placefinder.yaml` | Deployment mit drei Replikaten, Probes, Requests und Limit; Service; ConfigMap – Musterlösung der Übung |
 | `deploy/hpa.yaml` | Horizontal Pod Autoscaler (Zusatzaufgabe) |
-| `deploy/helm/placefinder/` | Helm-Chart mit denselben drei Objekten |
+| `deploy/helm/placefinder/` | Helm-Chart mit denselben drei Objekten, erklärt in [`deploy/helm/README.md`](deploy/helm/README.md) |
 | `deploy/helm/values-dev.yaml`, `values-prod.yaml` | Werte je Umgebung für das Chart |
 
 **Probes:** Die Readiness Probe fragt `/health`. Ist die Datenbank nicht erreichbar, bekommt der Pod keine Anfragen mehr, bleibt aber am Leben. Die Liveness Probe fragt `/livez`, das nur den Prozess prüft: Ein Ausfall der Datenbank soll nicht alle Pods gleichzeitig neu starten. Bis Tag `t08` fragten beide Probes `/health`.
