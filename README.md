@@ -72,7 +72,7 @@ Die Werte hängen vom Stand der GeoNames-Daten ab. VS Code leitet den Port aus d
 | `GET /docs`, `GET /openapi.json` | von FastAPI erzeugte Dokumentation (OpenAPI) |
 | `GET /places?q=…&limit=…`, `GET /places/{id}` | Version 0, veraltet: Liste einfacher JSON-Objekte. Die Antworten tragen die Header `Deprecation` und `Sunset` (01.01.2027) und verweisen mit `Link` auf `/v1/places`. |
 
-Alternative Namen machen auch deutsche Namen auffindbar: GeoNames führt München als „Munich“, `q=München` findet es trotzdem.
+Alternative Namen machen auch deutsche Namen auffindbar: GeoNames führt München als „Munich“, `q=München` (in der URL kodiert `q=M%C3%BCnchen`) findet es trotzdem.
 
 ## REST-API v1
 

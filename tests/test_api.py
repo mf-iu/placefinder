@@ -49,7 +49,7 @@ def test_search_ignores_case_and_spaces(client: TestClient) -> None:
 
 
 def test_search_finds_alternate_names(client: TestClient) -> None:
-    names = [p["name"] for p in client.get("/places", params={"q": "München"}).json()]
+    names = [p["name"] for p in client.get("/places?q=M%C3%BCnchen").json()]
     assert names == ["Munich"]
 
 
@@ -61,7 +61,7 @@ def test_search_orders_by_population(client: TestClient) -> None:
 def test_search_matches_beginning_of_names(client: TestClient) -> None:
     names = [p["name"] for p in client.get("/places", params={"q": "Er"}).json()]
     assert names == ["Erfurt", "Erlangen"]
-    names = [p["name"] for p in client.get("/places", params={"q": "Mün"}).json()]
+    names = [p["name"] for p in client.get("/places?q=M%C3%BCn").json()]
     assert names == ["Munich"]
 
 
