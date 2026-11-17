@@ -7,7 +7,7 @@
 ARG GEONAMES_FILE=cities15000
 
 # ---- Stage 1: GeoNames data (Creative Commons Attribution, CC BY 4.0) ----
-FROM python:3.14-slim AS data
+FROM python:3.15-slim AS data
 ARG GEONAMES_FILE
 WORKDIR /data
 # the slim image has no curl or unzip, Python does both
@@ -17,7 +17,7 @@ RUN python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1
  && rm data.zip
 
 # ---- Stage 2: build the virtual environment ----
-FROM python:3.14-slim AS build
+FROM python:3.15-slim AS build
 # take the uv binary from its official image (pinned version)
 COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /bin/uv
 # precompile bytecode; use the Python of the base image only
@@ -31,7 +31,7 @@ COPY src ./src
 RUN uv sync --locked --no-dev --no-editable
 
 # ---- Stage 3: runtime image without build tools ----
-FROM python:3.14-slim
+FROM python:3.15-slim
 ARG GEONAMES_FILE
 # unprivileged user instead of root;
 # pip is not needed at runtime and its bundled packages would
